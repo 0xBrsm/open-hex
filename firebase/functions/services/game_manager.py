@@ -16,7 +16,7 @@ from openhex import (
     Action, DiceMode, GameConfig, GameState, OpenHexEngine, PlayerColor,
     RobberMode, generate_standard_board, to_json, from_json,
 )
-from openhex.json_codec import _action_from_json, _event_to_json, _config_from_json, _board_from_json, _event_from_json, game_log_to_json, resolve_action_indices
+from openhex.json_codec import _action_from_json, _action_to_json, _event_to_json, _config_from_json, _board_from_json, _event_from_json, game_log_to_json, resolve_action_indices
 
 import config as cfg
 from services.elo import compute_1v1_updates, compute_4p_updates
@@ -159,7 +159,7 @@ def create_game(mode: str, bot_ids: list[str], seed: int | None = None) -> str:
 
 def _log_action(db, game_id: str, bot_id: str, bot_name: str,
                 action_dict: dict, success: bool, error: str | None = None,
-                duration_ms: int | None = None):
+                duration_ms: int | None = None, auto: bool = False):
     entry: dict = {
         "botId": bot_id,
         "botName": bot_name,
@@ -170,12 +170,17 @@ def _log_action(db, game_id: str, bot_id: str, bot_name: str,
     }
     if duration_ms is not None:
         entry["durationMs"] = duration_ms
+    if auto:
+        entry["auto"] = True   # made by the server for a seat past its deadline
     db.collection("games").document(game_id).collection("actionLog").add(entry)
 
 
 def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
-                    *, duration_ms: int | None = None) -> dict:
-    """Process a submitted action using a Firestore transaction for concurrency."""
+                    *, duration_ms: int | None = None, auto: bool = False) -> dict:
+    """Process a submitted action using a Firestore transaction for concurrency.
+
+    `auto` marks a move the server makes for a seat past its deadline
+    (`check_timeouts`); a move of the seat's own clears its timeout strikes."""
     action_dict = resolve_action_indices(action_dict)
 
     # Sanitize duration_ms: must be a non-negative integer
@@ -298,6 +303,9 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
         for public_field in ("stateJson", "seed"):
             if public_field in game:
                 update[public_field] = firestore.DELETE_FIELD
+        strikes = game.get("timeoutStrikes") or {}
+        if not auto and strikes.get(bot_id):
+            update["timeoutStrikes"] = {**strikes, bot_id: 0}
         transaction.update(game_ref, update)
         transaction.set(private_ref, {
             "seed": seed,
@@ -340,7 +348,7 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
         success = log_info[0] == "ok"
         error = result.get("error") if not success else None
         _log_action(db, game_id, bot_id, bot_name, log_info[1], success, error,
-                    duration_ms=dur_ms if success else None)
+                    duration_ms=dur_ms if success else None, auto=auto)
 
     if completed and winner_bid:
         _update_ratings(game_id)
@@ -543,7 +551,12 @@ def _save_replay_to_gcs(game_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def check_timeouts() -> int:
-    """Check for games past their action deadline. Returns count of aborted games."""
+    """Act for the seats past their action deadline, as colonist.io does: the
+    move the game waits on is made for the seat (`OpenHexEngine.default_action`)
+    and a strike recorded; `cfg.TIMEOUT_STRIKES` strikes in a row, or no
+    legal move to make, abort the game with that seat at fault. A move of
+    the seat's own clears its strikes (`process_action`). Returns the count
+    of games aborted."""
     db = _get_db()
     now = _now_iso()
 
@@ -558,29 +571,59 @@ def check_timeouts() -> int:
     for game_snap in overdue:
         game = game_snap.to_dict()
         game_id = game_snap.id
+        game_ref = db.collection("games").document(game_id)
 
         state = from_json(json.loads(load_state_json(game_id, game, db)), GameState)
         # The seats the game is waiting on are at fault: the current player,
         # or during a discard the players still to discard. (The roller of a
         # 7 must not lose the game because the other seat sat on its discard.)
-        overdue_colors = {c.value for c in state.players_to_act()}
+        overdue_colors = [c.value for c in state.players_to_act()]
         if not overdue_colors:
             continue
 
+        seats = {p["color"]: p for p in game["players"]}
+        strikes = dict(game.get("timeoutStrikes") or {})
+        struck_out: set[str] = set()
+        for color in overdue_colors:
+            seat = seats[color]
+            strikes[seat["botId"]] = strikes.get(seat["botId"], 0) + 1
+            if strikes[seat["botId"]] >= cfg.TIMEOUT_STRIKES:
+                struck_out.add(color)
+                continue
+            action = OpenHexEngine().default_action(state, PlayerColor(color))
+            if action is None:
+                struck_out.add(color)
+                continue
+            result = process_action(game_id, seat["botId"], seat["name"],
+                                    _action_to_json(action), auto=True)
+            if not result["success"]:
+                struck_out.add(color)
+                continue
+            # The move changed the game (another seat may still owe a discard)
+            game = game_ref.get().to_dict()
+            state = from_json(json.loads(load_state_json(game_id, game, db)), GameState)
+
+        if game["status"] != "active":
+            continue   # the move made for the seat ended the game
+        if not struck_out:
+            game_ref.update({"timeoutStrikes": strikes})
+            continue
+
         # Find winner: the highest VP among the seats not at fault
-        other_players = [p for p in game["players"] if p["color"] not in overdue_colors]
+        other_players = [p for p in game["players"] if p["color"] not in struck_out]
         if not other_players:
             other_players = list(game["players"])
         best = max(other_players, key=lambda p: state.compute_vp(PlayerColor(p["color"])))
         winner_bot_id = best["botId"]
         winner_name = best["name"]
 
-        db.collection("games").document(game_id).update({
+        game_ref.update({
             "status": "aborted",
             "winnerBotId": winner_bot_id,
             "winnerName": winner_name,
             "completedAt": _now_iso(),
             "actionDeadline": None,
+            "timeoutStrikes": strikes,
         })
 
         _update_ratings(game_id)
