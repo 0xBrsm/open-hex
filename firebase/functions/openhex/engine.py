@@ -297,7 +297,30 @@ class OpenHexEngine:
         err = self._require_main_phase(s, a)
         if err:
             return err
-        return self._validate_play_dev_card_common(s, a, DevCard.ROAD_BUILDING)
+        err = self._validate_play_dev_card_common(s, a, DevCard.ROAD_BUILDING)
+        if err:
+            return err
+        # A card with no road to place would leave a free road owed that can
+        # never be placed, and the game stuck until the seat times out.
+        if s.board.player_road_count(a.player) >= s.config.max_roads:
+            return "No road pieces left"
+        if not self._free_road_edges(s, a.player):
+            return "No room for a free road"
+        return None
+
+    def _free_road_edges(self, s: GameState, player: PlayerColor) -> list[Edge]:
+        """Edges a free road may take now: on the board, empty, joined to the
+        player's network."""
+        out: list[Edge] = []
+        seen: set[Edge] = set()
+        for tile in s.board.tiles:
+            for edge in tile.location.edges():
+                if edge in seen:
+                    continue
+                seen.add(edge)
+                if s.board.road_at(edge) is None and self._is_road_connected(s, player, edge):
+                    out.append(edge)
+        return out
 
     def _validate_play_year_of_plenty(self, s: GameState, a: Action) -> str | None:
         err = self._require_main_phase(s, a)
@@ -948,7 +971,12 @@ class OpenHexEngine:
         events.append(Event(type="freeRoadPlaced", player=a.player,
                             vertices=(edge.v1, edge.v2)))
         s.pending_action.remaining -= 1
-        if s.pending_action.remaining <= 0:
+        # A second road with no piece left or nowhere to go is forfeited
+        # (the rulebook: a player with one road left places one), rather
+        # than owed forever.
+        if (s.pending_action.remaining <= 0
+                or s.board.player_road_count(a.player) >= s.config.max_roads
+                or not self._free_road_edges(s, a.player)):
             s.pending_action = None
 
     # -- end turn ------------------------------------------------------------

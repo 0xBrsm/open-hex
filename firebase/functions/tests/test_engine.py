@@ -14,7 +14,8 @@ from openhex import (
     Resource, RobberMode, Road, Terrain, Tile, VertexBuilding, Edge, HexPoint,
     TERRAIN_RESOURCE, generate_standard_board, to_json, from_json,
 )
-from openhex.state import PendingAction
+from openhex.state import DiceResult, PendingAction
+from openhex.types import DevCard
 from services.hidden_info import filter_event_for_player, public_event
 
 RED, BLUE, WHITE, ORANGE = PlayerColor.RED, PlayerColor.BLUE, PlayerColor.WHITE, PlayerColor.ORANGE
@@ -193,6 +194,72 @@ class FriendlyRobberTest(unittest.TestCase):
         result = OpenHexEngine().execute_action(s, Action(type="moveRobber", player=RED,
                                                           location=HexPoint(1, -1, 0)))
         self.assertTrue(result.success, result.error)
+
+
+class RoadBuildingTest(unittest.TestCase):
+    """Road Building must never leave a free road owed that cannot be placed."""
+
+    def holding_road_building(self) -> GameState:
+        s = duel_state()
+        s.pending_action = None
+        s.dice = DiceResult(3, 4)
+        s.get_player(RED).dev_cards[DevCard.ROAD_BUILDING] = 1
+        return s
+
+    def play(self, s: GameState):
+        return OpenHexEngine().execute_action(s, Action(type="playRoadBuilding", player=RED))
+
+    def test_refused_with_no_road_piece_left(self):
+        s = self.holding_road_building()
+        corners = HexPoint(0, 0, 0).vertices()
+        s.board.settlements.append(VertexBuilding(corners[0], RED))
+        s.board.roads.append(Road(edge=Edge.between(corners[0], corners[1]), player=RED))
+        s.config.max_roads = 1
+        result = self.play(s)
+        self.assertFalse(result.success)
+        self.assertEqual(result.error, "No road pieces left")
+
+    def test_refused_with_nowhere_to_place_a_road(self):
+        s = self.holding_road_building()
+        v = HexPoint(0, 0, 0).vertices()[1]            # a type-A corner of the centre hex
+        far = v.adjacent_vertices()
+        s.board.settlements.append(VertexBuilding(v, RED))
+        s.board.roads.append(Road(edge=Edge.between(v, far[0]), player=RED))
+        s.board.settlements.append(VertexBuilding(far[0], BLUE))   # blocks the road's far end
+        for w in far[1:]:                                           # blue sits on the other two edges
+            s.board.roads.append(Road(edge=Edge.between(v, w), player=BLUE))
+        result = self.play(s)
+        self.assertFalse(result.success)
+        self.assertEqual(result.error, "No room for a free road")
+
+    def test_one_piece_left_places_one_road_and_moves_on(self):
+        s = self.holding_road_building()
+        corners = HexPoint(0, 0, 0).vertices()
+        s.board.settlements.append(VertexBuilding(corners[0], RED))
+        s.config.max_roads = 1
+        result = self.play(s)
+        self.assertTrue(result.success, result.error)
+        s = result.state
+        self.assertEqual((s.pending_action.type, s.pending_action.remaining), ("placeFreeRoad", 1))
+        result = OpenHexEngine().execute_action(s, Action(type="placeFreeRoad", player=RED,
+                                                          vertices=(corners[0], corners[1])))
+        self.assertTrue(result.success, result.error)
+        self.assertIsNone(result.state.pending_action)
+
+    def test_second_road_is_forfeited_when_the_first_uses_the_last_room(self):
+        s = self.holding_road_building()
+        v = HexPoint(0, 0, 0).vertices()[1]
+        far = v.adjacent_vertices()
+        s.board.settlements.append(VertexBuilding(v, RED))
+        s.board.settlements.append(VertexBuilding(far[0], BLUE))   # the one open edge ends at blue
+        for w in far[1:]:
+            s.board.roads.append(Road(edge=Edge.between(v, w), player=BLUE))
+        result = self.play(s)
+        self.assertTrue(result.success, result.error)
+        result = OpenHexEngine().execute_action(result.state, Action(type="placeFreeRoad", player=RED,
+                                                                     vertices=(v, far[0])))
+        self.assertTrue(result.success, result.error)
+        self.assertIsNone(result.state.pending_action)
 
 
 class PlayersToActTest(unittest.TestCase):
