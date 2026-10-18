@@ -596,6 +596,25 @@ def trigger_matchmaking():
     return jsonify({"games_created": len(game_ids), "game_ids": game_ids})
 
 
+@app.route("/api/stats")
+def get_stats():
+    """Site-wide counts for the home page, counted on the server."""
+    db = _get_db()
+
+    def count(query) -> int:
+        return int(query.count().get()[0][0].value)
+
+    resp = jsonify({
+        "bots": count(db.collection("bots")),
+        "active_games": count(db.collection("games").where("status", "==", "active")),
+        "completed_games": count(
+            db.collection("games").where("status", "in", ["completed", "aborted"])),
+        "queue": count(db.collection("queue")),
+    })
+    resp.headers["Cache-Control"] = "public, max-age=30"
+    return resp
+
+
 @app.route("/api/health")
 def health():
     return jsonify({"status": "ok"})

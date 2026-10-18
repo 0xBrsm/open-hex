@@ -119,6 +119,10 @@ function timeAgo(ts) {
 // Leaderboards only show bots that played within this many days, unless "See all" is on
 const ACTIVE_DAYS = 30;
 
+function fmtCount(n) {
+  return typeof n === "number" ? n : "—";
+}
+
 function playedRecently(bot) {
   if (!bot.lastGameAt) return false;
   const t = new Date(bot.lastGameAt).getTime();
@@ -659,20 +663,10 @@ function replayJump(pos) {
 async function renderHome() {
   $app.innerHTML = '<div class="loading">Loading...</div>';
 
-  const [botsSnap, activeSnap, completedSnap, queueSnap] = await Promise.all([
-    db.collection("bots").get(),
-    db.collection("games").where("status", "==", "active").get(),
-    db.collection("games").where("status", "in", ["completed", "aborted"]).get(),
-    db.collection("queue").get(),
-  ]);
-
-  const botCount = botsSnap.size;
-  const activeCount = activeSnap.size;
-  const completedCount = completedSnap.size;
-  const queueCount = queueSnap.size;
-
-  // Top 5 per mode
-  const [top1v1, top4p, recentGames] = await Promise.all([
+  // Counts come from the server: this SDK has no count queries, and downloading
+  // every completed game just to count them gets slower as the ladder grows
+  const [stats, top1v1, top4p, recentGames] = await Promise.all([
+    fetch("/api/stats").then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
     db.collection("bots").where("mode", "==", "1v1").orderBy("elo1v1", "desc").limit(100).get(),
     db.collection("bots").where("mode", "==", "4p").orderBy("elo4p", "desc").limit(100).get(),
     db.collection("games")
@@ -718,10 +712,10 @@ async function renderHome() {
 
   $app.innerHTML = `
     <div class="stat-grid" style="margin-bottom:1.5rem">
-      <div class="stat"><div class="stat-value">${botCount}</div><div class="stat-label">Bots</div></div>
-      <div class="stat"><div class="stat-value">${activeCount}</div><div class="stat-label">Active Games</div></div>
-      <div class="stat"><div class="stat-value">${completedCount}</div><div class="stat-label">Completed</div></div>
-      <div class="stat"><div class="stat-value">${queueCount}</div><div class="stat-label">In Queue</div></div>
+      <div class="stat"><div class="stat-value">${fmtCount(stats.bots)}</div><div class="stat-label">Bots</div></div>
+      <div class="stat"><div class="stat-value">${fmtCount(stats.active_games)}</div><div class="stat-label">Active Games</div></div>
+      <div class="stat"><div class="stat-value">${fmtCount(stats.completed_games)}</div><div class="stat-label">Completed</div></div>
+      <div class="stat"><div class="stat-value">${fmtCount(stats.queue)}</div><div class="stat-label">In Queue</div></div>
     </div>
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1.5rem">
       <div class="card">
