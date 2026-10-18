@@ -461,6 +461,7 @@ def _trade_to_json(t: Trade) -> dict:
         "requesting": _resource_map_to_json(t.requesting),
         "accepting": [c.value for c in t.accepting],
         "rejected": [c.value for c in t.rejected],
+        "counterTo": t.counter_to,
     }
 
 
@@ -472,6 +473,7 @@ def _trade_from_json(d: dict) -> Trade:
         requesting=_resource_map_from_json(d["requesting"]),
         accepting=[PlayerColor(c) for c in d.get("accepting", [])],
         rejected=[PlayerColor(c) for c in d.get("rejected", [])],
+        counter_to=d.get("counterTo"),
     )
 
 
@@ -596,6 +598,8 @@ def _action_to_json(a: Action) -> dict:
         d["offering"] = _resource_map_to_json(a.offering)
     if a.requesting:
         d["requesting"] = _resource_map_to_json(a.requesting)
+    if a.counter_to is not None:
+        d["counterTo"] = a.counter_to
     return d
 
 
@@ -624,6 +628,7 @@ def _action_from_json(d: dict) -> Action:
         trade_id=d.get("tradeId"),
         offering=_resource_map_from_json(d["offering"]) if d.get("offering") else None,
         requesting=_resource_map_from_json(d["requesting"]) if d.get("requesting") else None,
+        counter_to=d.get("counterTo"),
     )
 
 
@@ -665,6 +670,10 @@ def _event_to_json(e: Event) -> dict:
         d["offering"] = _resource_map_to_json(e.offering)
     if e.requesting:
         d["requesting"] = _resource_map_to_json(e.requesting)
+    if e.counter_to is not None:
+        d["counterTo"] = e.counter_to
+    if e.reason:
+        d["reason"] = e.reason
     if e.collected:
         d["collected"] = {c.value: n for c, n in e.collected.items() if n != 0}
     if e.resource_list:
@@ -720,6 +729,8 @@ def _event_from_json(d: dict) -> Event:
         trade_id=d.get("tradeId"),
         offering=_resource_map_from_json(d["offering"]) if d.get("offering") else None,
         requesting=_resource_map_from_json(d["requesting"]) if d.get("requesting") else None,
+        counter_to=d.get("counterTo"),
+        reason=d.get("reason"),
         collected=collected,
         resource_list=resource_list,
         length=d.get("length"),

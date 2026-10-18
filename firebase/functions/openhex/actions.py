@@ -28,6 +28,7 @@ class Action:
     trade_id: int | None = None
     offering: ResourceMap | None = None
     requesting: ResourceMap | None = None
+    counter_to: int | None = None                    # proposeTrade: the offer being countered
 
     def edge(self) -> Edge | None:
         if self.vertices is None:

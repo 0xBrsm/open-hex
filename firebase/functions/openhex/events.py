@@ -35,6 +35,8 @@ class Event:
     trade_id: int | None = None
     offering: ResourceMap | None = None
     requesting: ResourceMap | None = None
+    counter_to: int | None = None       # tradeProposed: the offer a counter-offer answers
+    reason: str | None = None           # tradeCancelled: why the offer closed
     # Monopoly collection per player
     collected: dict[PlayerColor, int] | None = None
     # Awards

@@ -31,6 +31,20 @@ from .types import (
 )
 
 
+# Player-to-player trade actions. Any other action closes every standing offer,
+# counter-offers included, before it runs: colonist.io takes the current
+# player's offers down when they make any other move (a build, a development
+# card, a bank trade, ending the turn).
+PLAYER_TRADE_ACTIONS = frozenset({
+    "proposeTrade",
+    "acceptTrade",
+    "rejectTrade",
+    "withdrawTradeAnswer",
+    "confirmTrade",
+    "cancelTrade",
+})
+
+
 @dataclass
 class ActionResult:
     success: bool
@@ -51,6 +65,8 @@ class OpenHexEngine:
         if err:
             return ActionResult(success=False, error=err)
 
+        if action.type not in PLAYER_TRADE_ACTIONS and s.trades:
+            self._close_trades(s, list(s.trades), "currentPlayerMoved", events)
         self._execute(s, action, events)
         self._check_awards(s, action, events)
         self._check_victory(s, events)
@@ -80,6 +96,7 @@ class OpenHexEngine:
             "proposeTrade": self._validate_propose_trade,
             "acceptTrade": self._validate_accept_trade,
             "rejectTrade": self._validate_reject_trade,
+            "withdrawTradeAnswer": self._validate_withdraw_trade_answer,
             "confirmTrade": self._validate_confirm_trade,
             "cancelTrade": self._validate_cancel_trade,
             "tradeWithBank": self._validate_trade_with_bank,
@@ -331,28 +348,100 @@ class OpenHexEngine:
         return None
 
     # -- trading -------------------------------------------------------------
+    #
+    # colonist.io's rules for trading between players. The current player
+    # makes offers, after the roll with nothing pending. Every other seat may
+    # accept, reject or counter; a counter-offer is a new offer from that seat
+    # to the current player alone. Answers can change while the offer stands.
+    # The current player executes an offer with one seat that accepted it
+    # (confirmTrade), or takes a counter-offer the same way. Nothing ever waits
+    # on an answer: the pending action stays None and the current player can
+    # always move on, which closes every standing offer.
 
-    def _validate_propose_trade(self, s: GameState, a: Action) -> str | None:
-        err = self._require_main_phase(s, a)
-        if err:
-            return err
+    def _require_trading_open(self, s: GameState) -> str | None:
+        if s.is_setup_phase:
+            return "Cannot trade during setup"
+        if s.dice is None:
+            return "Must roll dice first"
+        return self._require_no_pending(s)
+
+    def _trade_addressees(self, s: GameState, trade: Trade) -> list[PlayerColor]:
+        """Seats that may answer an offer: every other seat for an offer by
+        the current player, only the current player for a counter-offer."""
+        if trade.counter_to is not None:
+            return [s.current_player]
+        return [c for c in s.turn_order if c != trade.proposer]
+
+    def _validate_offer_terms(self, s: GameState, a: Action) -> str | None:
+        """Terms shared by offers and counter-offers: both sides non-empty
+        (no gifts), positive whole counts, no resource on both sides, the
+        creator holds what it offers and has no identical offer standing."""
         if not a.offering or not a.requesting:
             return "Must offer and request resources"
+        for side, rm in (("offering", a.offering), ("requesting", a.requesting)):
+            for r, n in rm.items():
+                if not isinstance(r, Resource):
+                    return f"Invalid resource in {side}: {r!r}"
+                if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+                    return f"Counts in {side} must be positive integers"
+        both = sorted(r.value for r in set(a.offering) & set(a.requesting))
+        if both:
+            return f"Cannot trade a resource for itself: {', '.join(both)}"
         player = s.get_player(a.player)
         if not has_resources(player.hand, a.offering):
             return "Insufficient resources to offer"
+        for t in s.trades:
+            if (t.proposer == a.player and t.offering == a.offering
+                    and t.requesting == a.requesting):
+                return f"An identical offer is already standing (tradeId {t.trade_id})"
         return None
 
-    def _validate_accept_trade(self, s: GameState, a: Action) -> str | None:
-        if s.is_setup_phase:
-            return "Cannot trade during setup"
+    def _validate_propose_trade(self, s: GameState, a: Action) -> str | None:
+        if a.counter_to is not None:
+            return self._validate_counter_offer(s, a)
+        if not s.is_setup_phase and a.player != s.current_player:
+            return ("Only the current player makes offers; "
+                    "answer or counter (counterTo) one of theirs")
+        err = self._require_main_phase(s, a)
+        if err:
+            return err
+        return self._validate_offer_terms(s, a)
+
+    def _validate_counter_offer(self, s: GameState, a: Action) -> str | None:
+        err = self._require_trading_open(s)
+        if err:
+            return err
+        if a.player == s.current_player:
+            return "The current player makes new offers, not counter-offers (omit counterTo)"
+        original = self._find_trade(s, a.counter_to)
+        if original is None:
+            return "Offer to counter not found"
+        if original.counter_to is not None or original.proposer != s.current_player:
+            return "Only the current player's own offers can be countered"
+        return self._validate_offer_terms(s, a)
+
+    def _validate_answer(self, s: GameState, a: Action) -> tuple[Trade | None, str | None]:
+        """Checks shared by acceptTrade, rejectTrade and withdrawTradeAnswer."""
+        err = self._require_trading_open(s)
+        if err:
+            return None, err
         if a.trade_id is None:
-            return "Missing tradeId"
+            return None, "Missing tradeId"
         trade = self._find_trade(s, a.trade_id)
         if trade is None:
-            return "Trade not found"
+            return None, "Trade not found"
         if a.player == trade.proposer:
-            return "Cannot accept own trade"
+            return None, "Cannot answer your own offer"
+        if a.player not in self._trade_addressees(s, trade):
+            return None, "A counter-offer is addressed to the current player only"
+        return trade, None
+
+    def _validate_accept_trade(self, s: GameState, a: Action) -> str | None:
+        trade, err = self._validate_answer(s, a)
+        if err:
+            return err
+        if trade.counter_to is not None:
+            return "Take a counter-offer with confirmTrade"
         if a.player in trade.accepting:
             return "Already accepted"
         player = s.get_player(a.player)
@@ -361,41 +450,26 @@ class OpenHexEngine:
         return None
 
     def _validate_reject_trade(self, s: GameState, a: Action) -> str | None:
-        if s.is_setup_phase:
-            return "Cannot trade during setup"
-        if a.trade_id is None:
-            return "Missing tradeId"
-        trade = self._find_trade(s, a.trade_id)
-        if trade is None:
-            return "Trade not found"
-        if a.player == trade.proposer:
-            return "Cannot reject own trade"
+        trade, err = self._validate_answer(s, a)
+        if err:
+            return err
+        if a.player in trade.rejected:
+            return "Already rejected"
+        return None
+
+    def _validate_withdraw_trade_answer(self, s: GameState, a: Action) -> str | None:
+        trade, err = self._validate_answer(s, a)
+        if err:
+            return err
+        if a.player not in trade.accepting and a.player not in trade.rejected:
+            return "No answer to withdraw"
         return None
 
     def _validate_confirm_trade(self, s: GameState, a: Action) -> str | None:
         err = self._require_current_player(s, a)
         if err:
             return err
-        if a.trade_id is None or a.partner is None:
-            return "Missing tradeId or partner"
-        trade = self._find_trade(s, a.trade_id)
-        if trade is None:
-            return "Trade not found"
-        if a.player != trade.proposer:
-            return "Only proposer can confirm"
-        if a.partner not in trade.accepting:
-            return "Partner has not accepted"
-        # Re-check both sides have resources
-        proposer = s.get_player(a.player)
-        partner = s.get_player(a.partner)
-        if not has_resources(proposer.hand, trade.offering):
-            return "Proposer no longer has offered resources"
-        if not has_resources(partner.hand, trade.requesting):
-            return "Partner no longer has requested resources"
-        return None
-
-    def _validate_cancel_trade(self, s: GameState, a: Action) -> str | None:
-        err = self._require_current_player(s, a)
+        err = self._require_trading_open(s)
         if err:
             return err
         if a.trade_id is None:
@@ -403,8 +477,31 @@ class OpenHexEngine:
         trade = self._find_trade(s, a.trade_id)
         if trade is None:
             return "Trade not found"
+        if trade.counter_to is None:
+            if a.player != trade.proposer:
+                return "Only proposer can confirm"
+            if a.partner is None:
+                return "Missing partner"
+            if a.partner not in trade.accepting:
+                return "Partner has not accepted"
+        elif a.partner is not None and a.partner != trade.proposer:
+            return "A counter-offer executes with the seat that made it"
+        # Re-check both hands: the creator gives `offering`, the other side `requesting`
+        counterpart = self._trade_counterpart(trade, a)
+        if not has_resources(s.get_player(trade.proposer).hand, trade.offering):
+            return f"{trade.proposer.value} no longer has the offered resources"
+        if not has_resources(s.get_player(counterpart).hand, trade.requesting):
+            return f"{counterpart.value} no longer has the requested resources"
+        return None
+
+    def _validate_cancel_trade(self, s: GameState, a: Action) -> str | None:
+        if a.trade_id is None:
+            return "Missing tradeId"
+        trade = self._find_trade(s, a.trade_id)
+        if trade is None:
+            return "Trade not found"
         if a.player != trade.proposer:
-            return "Only proposer can cancel"
+            return "Only the offer's creator can cancel it"
         return None
 
     def _validate_trade_with_bank(self, s: GameState, a: Action) -> str | None:
@@ -551,6 +648,7 @@ class OpenHexEngine:
             "proposeTrade": self._exec_propose_trade,
             "acceptTrade": self._exec_accept_trade,
             "rejectTrade": self._exec_reject_trade,
+            "withdrawTradeAnswer": self._exec_withdraw_trade_answer,
             "confirmTrade": self._exec_confirm_trade,
             "cancelTrade": self._exec_cancel_trade,
             "tradeWithBank": self._exec_trade_with_bank,
@@ -818,42 +916,72 @@ class OpenHexEngine:
             proposer=a.player,
             offering=dict(a.offering),
             requesting=dict(a.requesting),
+            counter_to=a.counter_to,
         )
         s.trades.append(trade)
         s.next_trade_id += 1
         s.trades_proposed_this_turn += 1
         events.append(Event(type="tradeProposed", player=a.player,
                             trade_id=trade.trade_id,
-                            offering=trade.offering, requesting=trade.requesting))
+                            offering=trade.offering, requesting=trade.requesting,
+                            counter_to=trade.counter_to))
 
     def _exec_accept_trade(self, s: GameState, a: Action, events: list[Event]):
         trade = self._find_trade(s, a.trade_id)
+        if a.player in trade.rejected:
+            trade.rejected.remove(a.player)
         trade.accepting.append(a.player)
         events.append(Event(type="tradeAccepted", player=a.player, trade_id=a.trade_id))
 
     def _exec_reject_trade(self, s: GameState, a: Action, events: list[Event]):
         trade = self._find_trade(s, a.trade_id)
+        if a.player in trade.accepting:
+            trade.accepting.remove(a.player)
         trade.rejected.append(a.player)
         events.append(Event(type="tradeRejected", player=a.player, trade_id=a.trade_id))
+        # Refused by every seat it was put to: colonist closes it 1.5 s after
+        # the last refusal unless an answer changes first. Turn-based, it
+        # closes now.
+        if all(c in trade.rejected for c in self._trade_addressees(s, trade)):
+            self._close_trades(s, [trade], "allRejected", events)
+
+    def _exec_withdraw_trade_answer(self, s: GameState, a: Action, events: list[Event]):
+        trade = self._find_trade(s, a.trade_id)
+        if a.player in trade.accepting:
+            trade.accepting.remove(a.player)
+        if a.player in trade.rejected:
+            trade.rejected.remove(a.player)
+        events.append(Event(type="tradeAnswerWithdrawn", player=a.player, trade_id=a.trade_id))
 
     def _exec_confirm_trade(self, s: GameState, a: Action, events: list[Event]):
         trade = self._find_trade(s, a.trade_id)
-        proposer = s.get_player(a.player)
-        partner = s.get_player(a.partner)
+        counterpart = self._trade_counterpart(trade, a)
+        creator = s.get_player(trade.proposer)
+        other = s.get_player(counterpart)
 
-        proposer.hand = subtract_resources(proposer.hand, trade.offering)
-        proposer.hand = add_resources(proposer.hand, trade.requesting)
-        partner.hand = subtract_resources(partner.hand, trade.requesting)
-        partner.hand = add_resources(partner.hand, trade.offering)
+        creator.hand = subtract_resources(creator.hand, trade.offering)
+        creator.hand = add_resources(creator.hand, trade.requesting)
+        other.hand = subtract_resources(other.hand, trade.requesting)
+        other.hand = add_resources(other.hand, trade.offering)
 
-        s.trades = [t for t in s.trades if t.trade_id != a.trade_id]
-        events.append(Event(type="tradeExecuted", player=a.player, partner=a.partner,
-                            trade_id=a.trade_id,
+        s.trades = [t for t in s.trades if t.trade_id != trade.trade_id]
+        events.append(Event(type="tradeExecuted", player=trade.proposer, partner=counterpart,
+                            trade_id=trade.trade_id,
                             offering=trade.offering, requesting=trade.requesting))
 
     def _exec_cancel_trade(self, s: GameState, a: Action, events: list[Event]):
-        s.trades = [t for t in s.trades if t.trade_id != a.trade_id]
-        events.append(Event(type="tradeCancelled", player=a.player, trade_id=a.trade_id))
+        self._close_trades(s, [self._find_trade(s, a.trade_id)], "cancelled", events)
+
+    def _close_trades(self, s: GameState, trades: list[Trade], reason: str,
+                      events: list[Event]):
+        """Take offers down, one tradeCancelled event each, naming the
+        offer's creator and why: "cancelled" (by its creator), "allRejected"
+        or "currentPlayerMoved" (any other move, ending the turn included)."""
+        closing = {t.trade_id for t in trades}
+        s.trades = [t for t in s.trades if t.trade_id not in closing]
+        for t in trades:
+            events.append(Event(type="tradeCancelled", player=t.proposer,
+                                trade_id=t.trade_id, reason=reason))
 
     def _exec_trade_with_bank(self, s: GameState, a: Action, events: list[Event]):
         player = s.get_player(a.player)
@@ -932,8 +1060,7 @@ class OpenHexEngine:
     def _exec_end_turn(self, s: GameState, a: Action, events: list[Event]):
         events.append(Event(type="turnEnded", player=a.player, turn_number=s.turn_number))
 
-        # Clear turn state
-        s.trades.clear()
+        # Clear turn state (standing offers were closed before this ran)
         s.trades_proposed_this_turn = 0
         s.played_dev_card_this_turn = False
         s.dice = None
@@ -1107,3 +1234,8 @@ class OpenHexEngine:
             if t.trade_id == trade_id:
                 return t
         return None
+
+    def _trade_counterpart(self, trade: Trade, a: Action) -> PlayerColor:
+        """The seat trading with an offer's creator on confirmTrade: the
+        chosen partner for an offer, the current player for a counter-offer."""
+        return a.player if trade.counter_to is not None else a.partner

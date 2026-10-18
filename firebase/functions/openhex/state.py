@@ -46,12 +46,21 @@ class PendingAction:
 
 @dataclass
 class Trade:
+    """A standing offer between players.
+
+    `proposer` is the offer's creator: it gives `offering` and receives
+    `requesting`. A plain offer is made by the current player to every other
+    seat. A counter-offer (`counter_to` set to the id of a standing offer by
+    the current player) is made by another seat and is addressed to the
+    current player alone, who takes it with confirmTrade.
+    """
     trade_id: int
     proposer: PlayerColor
     offering: ResourceMap
     requesting: ResourceMap
     accepting: list[PlayerColor] = field(default_factory=list)
     rejected: list[PlayerColor] = field(default_factory=list)
+    counter_to: int | None = None
 
 
 @dataclass

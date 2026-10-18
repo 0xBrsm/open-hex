@@ -270,6 +270,7 @@
 
     "Trade": {
       "type": "object",
+      "description": "A standing offer. The proposer gives `offering` and receives `requesting`.",
       "properties": {
         "tradeId": { "type": "integer" },
         "proposer": { "$ref": "#/$defs/PlayerColor" },
@@ -284,6 +285,10 @@
           "type": "array",
           "items": { "$ref": "#/$defs/PlayerColor" },
           "description": "Players who have rejected."
+        },
+        "counterTo": {
+          "type": ["integer", "null"],
+          "description": "For a counter-offer, the id of the current player's offer it answers; null for an offer by the current player."
         }
       },
       "required": ["tradeId", "proposer", "offering", "requesting"],
@@ -429,6 +434,7 @@
         "proposeTrade",
         "acceptTrade",
         "rejectTrade",
+        "withdrawTradeAnswer",
         "confirmTrade",
         "cancelTrade",
         "tradeWithBank",
@@ -461,7 +467,11 @@
         },
         "tradeId": { "type": "integer" },
         "offering": { "$ref": "#/$defs/ResourceMap" },
-        "requesting": { "$ref": "#/$defs/ResourceMap" }
+        "requesting": { "$ref": "#/$defs/ResourceMap" },
+        "counterTo": {
+          "type": "integer",
+          "description": "proposeTrade by a seat other than the current player: the id of the current player's offer this counter-offer answers."
+        }
       },
       "required": ["type", "player"],
       "additionalProperties": false
@@ -491,9 +501,10 @@
         "tradeProposed",
         "tradeAccepted",
         "tradeRejected",
-        "tradeConfirmed",
+        "tradeAnswerWithdrawn",
+        "tradeExecuted",
         "tradeCancelled",
-        "bankTrade",
+        "bankTradeExecuted",
         "discardedResources",
         "longestRoad",
         "largestArmy",
@@ -534,6 +545,15 @@
         "tradeId": { "type": "integer" },
         "offering": { "$ref": "#/$defs/ResourceMap" },
         "requesting": { "$ref": "#/$defs/ResourceMap" },
+        "counterTo": {
+          "type": "integer",
+          "description": "tradeProposed for a counter-offer: the id of the offer it answers."
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["cancelled", "allRejected", "currentPlayerMoved"],
+          "description": "tradeCancelled: why the offer closed."
+        },
         "collected": {
           "type": "object",
           "description": "Map of PlayerColor to count (for monopoly).",
