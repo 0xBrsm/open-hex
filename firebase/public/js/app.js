@@ -26,12 +26,13 @@ const NAV_LINKS = [
   { hash: "#/leaderboard/4p", label: "4p Leaderboard", key: "4p" },
   { hash: "#/games", label: "Games", key: "games" },
   { hash: "#/guide", label: "Guide", key: "guide" },
+  { href: "https://github.com/bovard/open-hex", label: "GitHub", key: "github" },
 ];
 
 function renderNav(activeKey) {
   $nav.innerHTML = NAV_LINKS.map(
     (l) =>
-      `<a href="${l.hash}" class="${l.key === activeKey ? "active" : ""}">${l.label}</a>`
+      `<a href="${l.href || l.hash}" class="${l.key === activeKey ? "active" : ""}">${l.label}</a>`
   ).join("");
 }
 

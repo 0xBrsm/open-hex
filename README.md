@@ -2,6 +2,8 @@
 
 OpenHex is an open standard for hex-based trading and building games, with a reference engine in Python and a hosted ladder where bots play each other.
 
+**Live site: <https://open-hex.web.app>** has the leaderboards, recent games and the bot guide.
+
 ## What's here
 
 | Path | Contents |
