@@ -457,16 +457,23 @@ class OpenHexEngine:
             return "Not a valid hex"
         if tile.terrain == Terrain.DESERT and s.board.robber == loc:
             return "Robber already on desert"
-        # Friendly robber check
-        if s.config.robber_mode == RobberMode.FRIENDLY:
-            player_vp = s.compute_public_vp(a.player)
-            for v in loc.vertices():
-                b = s.board.building_at(v)
-                if b and b.player != a.player:
-                    target_vp = s.compute_public_vp(b.player)
-                    if target_vp <= 2:  # Still at starting VP
-                        return "Friendly robber: cannot block player at starting VP"
+        # Friendly robber: hexes with an opponent still at starting VP are
+        # off limits, unless every other hex is too (the spec's fallback).
+        if (s.config.robber_mode == RobberMode.FRIENDLY
+                and self._friendly_robber_shields(s, a.player, loc)
+                and any(not self._friendly_robber_shields(s, a.player, t.location)
+                        for t in s.board.tiles if t.location != s.board.robber)):
+            return "Friendly robber: cannot block player at starting VP"
         return None
+
+    def _friendly_robber_shields(self, s: GameState, mover: PlayerColor,
+                                 loc: HexPoint) -> bool:
+        """Whether an opponent at starting VP (2 visible points) has a building on `loc`."""
+        for v in loc.vertices():
+            b = s.board.building_at(v)
+            if b and b.player != mover and s.compute_public_vp(b.player) <= 2:
+                return True
+        return False
 
     def _validate_steal_from_player(self, s: GameState, a: Action) -> str | None:
         err = self._require_current_player(s, a)

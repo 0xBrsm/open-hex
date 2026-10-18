@@ -105,7 +105,7 @@ Standard deck: **25 cards** total. Use this deck for all player counts (2-4).
 | Value | Description |
 |-------|-------------|
 | `"normal"` | Standard robber rules |
-| `"friendly"` | Cannot place robber on hex adjacent to a player with fewer VP than you |
+| `"friendly"` | Cannot place robber on a hex adjacent to a player still at starting VP (2 visible points), unless every other hex is (see [Robber Rules](#robber-rules)) |
 
 ### Dice Mode
 
@@ -622,7 +622,7 @@ Move the robber to a new hex (after rolling a 7 or playing a knight).
 {"type": "moveRobber", "player": "red", "location": {"x": 1, "y": -1, "z": 0}}
 ```
 
-The robber MUST be moved to a different hex than its current position. In `"friendly"` robber mode, the robber cannot be placed on a hex adjacent to a player who has fewer visible VP than you.
+The robber MUST be moved to a different hex than its current position. In `"friendly"` robber mode, the robber cannot be placed on a hex adjacent to a player whose visible VP are still the starting 2, unless every other hex is such a hex (see [Robber Rules](#robber-rules)).
 
 #### stealFromPlayer
 
