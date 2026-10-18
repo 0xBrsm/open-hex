@@ -45,6 +45,14 @@ PLAYER_TRADE_ACTIONS = frozenset({
 })
 
 
+def is_off_turn_trade(state: GameState, action: Action) -> bool:
+    """A trade action by a seat other than the current player: an answer, a
+    counter-offer, or cancelling its own counter. These are optional; the
+    game never waits on them, so a server's per-move deadline stays with the
+    current player."""
+    return action.type in PLAYER_TRADE_ACTIONS and action.player != state.current_player
+
+
 @dataclass
 class ActionResult:
     success: bool

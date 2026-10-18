@@ -16,6 +16,7 @@ from openhex import (
     Action, DiceMode, GameConfig, GameState, OpenHexEngine, PlayerColor,
     RobberMode, generate_standard_board, to_json, from_json,
 )
+from openhex.engine import is_off_turn_trade
 from openhex.json_codec import _action_from_json, _event_to_json, _config_from_json, _board_from_json, _event_from_json, game_log_to_json, resolve_action_indices
 
 import config as cfg
@@ -210,8 +211,17 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
             filtered = filter_event_for_player(event_json, bot_color)
             event_entries.append({"seq": seq, "event": filtered})
 
-        # Determine game outcome
-        deadline = _deadline_iso() if new_state.winner is None else None
+        # Determine game outcome. The deadline belongs to the current player
+        # (check_timeouts blames them). A trade action by any other seat -- an
+        # answer, a counter-offer, cancelling its own counter -- is optional and
+        # leaves that deadline where it was, so answers can't keep a stalled
+        # turn alive.
+        if new_state.winner is not None:
+            deadline = None
+        elif is_off_turn_trade(state, action):
+            deadline = game.get("actionDeadline")
+        else:
+            deadline = _deadline_iso()
         status = "completed" if new_state.winner is not None else "active"
         winner_bot_id = None
         winner_name = None

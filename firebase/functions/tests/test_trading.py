@@ -16,7 +16,7 @@ from openhex import (
     generate_standard_board, from_json, to_json, game_log_to_json, game_log_from_json,
 )
 from openhex.board import VertexBuilding
-from openhex.engine import PLAYER_TRADE_ACTIONS
+from openhex.engine import PLAYER_TRADE_ACTIONS, is_off_turn_trade
 from openhex.json_codec import _action_from_json
 from openhex.state import DiceResult
 from openhex.types import Resource
@@ -500,6 +500,30 @@ class PublicInformation(TradeCase):
             self.assertEqual(filter_state_for_player(state, seat)["trades"], state["trades"])
             for e in accepted + executed:
                 self.assertEqual(filter_event_for_player(e, seat), e)
+
+
+class Deadline(TradeCase):
+    def test_only_the_current_players_moves_owe_the_deadline(self):
+        # The ladder's 60-second deadline stays with the current player: trade
+        # actions by other seats are optional and must not extend it.
+        s, tid = self.offer(main_phase())
+        off_turn = [
+            Action(type="acceptTrade", player=BLUE, trade_id=tid),
+            Action(type="rejectTrade", player=WHITE, trade_id=tid),
+            Action(type="withdrawTradeAnswer", player=WHITE, trade_id=tid),
+            Action(type="proposeTrade", player=ORANGE, offering={ORE: 1},
+                   requesting={WOOD: 1}, counter_to=tid),
+            Action(type="cancelTrade", player=ORANGE, trade_id=2),
+        ]
+        on_turn = [
+            Action(type="proposeTrade", player=RED, offering={SHEEP: 1}, requesting={ORE: 1}),
+            Action(type="confirmTrade", player=RED, trade_id=tid, partner=BLUE),
+            Action(type="cancelTrade", player=RED, trade_id=tid),
+            Action(type="endTurn", player=RED),
+            Action(type="discardResources", player=BLUE, resources={WOOD: 1}),
+        ]
+        self.assertTrue(all(is_off_turn_trade(s, a) for a in off_turn))
+        self.assertFalse(any(is_off_turn_trade(s, a) for a in on_turn))
 
 
 class Contract(unittest.TestCase):
