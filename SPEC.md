@@ -397,7 +397,30 @@ Each entry in the `players` array contains both private and public information.
 | `isSetupPhase` | boolean | True during initial placement |
 | `dice` | DiceResult \| null | Last dice roll, null if not yet rolled |
 | `playedDevCardThisTurn` | boolean | Whether a dev card was played this turn |
-| `tradesProposedThisTurn` | integer | Number of trades proposed this turn |
+| `tradesProposedThisTurn` | integer | Number of offers made this turn, counter-offers included |
+
+### Trades
+
+`trades` lists the offers between players that are standing now (section 7, Trading). It is public: every seat sees every offer and every answer.
+
+```json
+"trades": [
+  {"tradeId": 1, "proposer": "red", "offering": {"wood": 2}, "requesting": {"wheat": 1},
+   "accepting": ["white"], "rejected": ["orange"], "counterTo": null},
+  {"tradeId": 2, "proposer": "blue", "offering": {"wheat": 1}, "requesting": {"wood": 3},
+   "accepting": [], "rejected": [], "counterTo": 1}
+]
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tradeId` | integer | Unique within the game, assigned by the engine from 1 |
+| `proposer` | string | The offer's creator. It gives `offering` and receives `requesting` |
+| `offering` | ResourceMap | What the creator gives |
+| `requesting` | ResourceMap | What the creator receives |
+| `accepting` | [string] | Seats that have accepted |
+| `rejected` | [string] | Seats that have rejected |
+| `counterTo` | integer \| null | For a counter-offer, the `tradeId` of the current player's offer it answers; `null` for the current player's own offers |
 
 ### Pending Action
 
@@ -549,49 +572,91 @@ Play a Monopoly card and name a resource. All other players give all of that res
 
 ### Trading
 
+Players trade with each other only during the current player's turn, and only with the current player. These rules follow colonist.io. Trades with the bank are separate (`tradeWithBank`).
+
+**An offer's life.** The current player makes offers with `proposeTrade`, after rolling and while no action is pending. Every other seat may accept, reject, or counter it, and may change its answer while the offer stands: accept to reject, reject to accept, or back to no answer. The current player executes an offer with one of the seats that accepted it (`confirmTrade`). An offer stands until one of these happens:
+
+- it is executed (`confirmTrade`, event `tradeExecuted`);
+- its creator cancels it (`cancelTrade`);
+- every seat it was put to has rejected it;
+- the current player takes any action other than the trade actions in this section: a build, buying or playing a development card, a bank trade, `endTurn`. Every standing offer, counter-offers included, closes before that action takes effect.
+
+Every close other than execution produces a `tradeCancelled` event with a `reason`. Executing one offer leaves the others standing.
+
+**Answering is optional.** Standing offers never set `pendingAction`: the game never waits on an answer, and the current player may move on at any time. An answer to an offer that has just closed fails with `Trade not found`.
+
+**Terms** (every `proposeTrade`, counter-offers included):
+
+- `offering` and `requesting` are both non-empty, with positive integer counts (no gifts);
+- no resource appears on both sides;
+- the creator holds `offering`;
+- the creator has no identical offer standing (same `offering` and `requesting`). A duplicate is refused with an error that names the standing `tradeId`.
+
+There is no limit on the number of offers per turn.
+
 #### proposeTrade
 
-Propose a trade to other players.
+Make an offer to every other seat. Only the current player makes offers.
 
 ```json
-{
-  "type": "proposeTrade",
-  "player": "red",
-  "tradeId": 1,
-  "offering": {"wood": 2},
-  "requesting": {"wheat": 1}
-}
+{"type": "proposeTrade", "player": "red", "offering": {"wood": 2}, "requesting": {"wheat": 1}}
 ```
 
-The `tradeId` is a unique integer within the game, assigned sequentially starting from 1.
+The engine assigns the offer's `tradeId` (unique within the game, sequential from 1) and reports it in the `tradeProposed` event and in `trades`.
+
+**Counter-offer.** Another seat answers one of the current player's standing offers with terms of its own by setting `counterTo` to that offer's `tradeId`:
+
+```json
+{"type": "proposeTrade", "player": "blue", "counterTo": 1, "offering": {"wheat": 1}, "requesting": {"wood": 3}}
+```
+
+A counter-offer is a new offer with its own `tradeId`, addressed to the current player alone. Its creator (here blue) gives `offering` and receives `requesting`, exactly as written. The current player takes it with `confirmTrade` or turns it down with `rejectTrade`; no other seat may answer it. It stands independently of the offer it answers. A counter-offer cannot itself be countered, and the current player does not use `counterTo`: the current player answers a counter-offer by proposing a new offer.
 
 #### acceptTrade
 
-Accept a proposed trade.
+Accept one of the current player's offers. The accepting seat must hold the offer's `requesting`. Accepting moves no cards: the current player chooses among the seats that accepted.
 
 ```json
 {"type": "acceptTrade", "player": "blue", "tradeId": 1}
 ```
 
+A seat that had rejected the offer may accept it. Counter-offers are not accepted: the current player takes them with `confirmTrade`.
+
 #### rejectTrade
 
-Reject a proposed trade.
+Reject an offer. A seat that had accepted it may reject it. The current player may reject a counter-offer. When every seat the offer was put to has rejected it, the offer closes (`tradeCancelled` with reason `allRejected`).
 
 ```json
 {"type": "rejectTrade", "player": "blue", "tradeId": 1}
 ```
 
+#### withdrawTradeAnswer
+
+Take back an acceptance or a rejection, leaving the seat with no answer.
+
+```json
+{"type": "withdrawTradeAnswer", "player": "blue", "tradeId": 1}
+```
+
 #### confirmTrade
 
-The proposing player confirms a trade with a specific accepting partner.
+Execute a trade. Only the current player confirms. For the current player's own offer, `partner` names one of the seats that accepted it:
 
 ```json
 {"type": "confirmTrade", "player": "red", "tradeId": 1, "partner": "blue"}
 ```
 
+For a counter-offer, `partner` may be omitted; if given it must be the counter-offer's creator:
+
+```json
+{"type": "confirmTrade", "player": "red", "tradeId": 2}
+```
+
+Both hands are checked again when the trade executes: the offer's creator must still hold `offering` and the other side `requesting`.
+
 #### cancelTrade
 
-Cancel a proposed trade.
+Withdraw one of your own standing offers. A seat that made a counter-offer may cancel it.
 
 ```json
 {"type": "cancelTrade", "player": "red", "tradeId": 1}
@@ -790,6 +855,8 @@ Zero-count entries in `collected` MAY be omitted.
 
 ### Trading Events
 
+Every offer between players produces one `tradeProposed` event and ends with exactly one `tradeExecuted` or `tradeCancelled` event. All trading events are public.
+
 #### tradeProposed
 
 ```json
@@ -799,6 +866,19 @@ Zero-count entries in `collected` MAY be omitted.
   "tradeId": 1,
   "offering": {"wood": 2},
   "requesting": {"wheat": 1}
+}
+```
+
+A counter-offer carries `counterTo`, the `tradeId` of the offer it answers:
+
+```json
+{
+  "type": "tradeProposed",
+  "player": "blue",
+  "tradeId": 2,
+  "counterTo": 1,
+  "offering": {"wheat": 1},
+  "requesting": {"wood": 3}
 }
 ```
 
@@ -814,7 +894,17 @@ Zero-count entries in `collected` MAY be omitted.
 {"type": "tradeRejected", "player": "white", "tradeId": 1}
 ```
 
+#### tradeAnswerWithdrawn
+
+A seat took back its acceptance or rejection.
+
+```json
+{"type": "tradeAnswerWithdrawn", "player": "white", "tradeId": 1}
+```
+
 #### tradeExecuted
+
+`player` is the offer's creator, who gave `offering` and received `requesting`; `partner` gave `requesting` and received `offering`.
 
 ```json
 {
@@ -827,11 +917,32 @@ Zero-count entries in `collected` MAY be omitted.
 }
 ```
 
-#### tradeCancelled
+For a counter-offer, `player` is the seat that made it and `partner` is the current player:
 
 ```json
-{"type": "tradeCancelled", "player": "red", "tradeId": 1}
+{
+  "type": "tradeExecuted",
+  "tradeId": 2,
+  "player": "blue",
+  "partner": "red",
+  "offering": {"wheat": 1},
+  "requesting": {"wood": 3}
+}
 ```
+
+#### tradeCancelled
+
+An offer closed without executing. `player` is the offer's creator.
+
+```json
+{"type": "tradeCancelled", "player": "red", "tradeId": 1, "reason": "allRejected"}
+```
+
+| `reason` | Meaning |
+|----------|---------|
+| `cancelled` | Its creator cancelled it (`cancelTrade`) |
+| `allRejected` | Every seat it was put to rejected it |
+| `currentPlayerMoved` | The current player took another action (a build, a development card, a bank trade, `endTurn`). These events come before that action's own events |
 
 #### bankTradeExecuted
 
@@ -938,7 +1049,7 @@ Each turn follows this sequence:
    - Build roads, settlements, cities
    - Buy development cards
    - Play one development card (except VP cards and cards bought this turn)
-   - Propose, accept, reject, confirm, or cancel trades
+   - Trade with other players: offer, confirm, or cancel trades, while the other seats answer, counter, or withdraw their answers (section 7, Trading). Any other action closes every standing offer
    - Trade with the bank
 5. **End turn**: Player submits `endTurn`
 
@@ -1084,6 +1195,7 @@ In a multiplayer game, not all state is visible to all players. The spec defines
 - `knightsPlayed`, `longestRoadLength`
 - `publicVictoryPoints`
 - `currentPlayer`, `turnOrder`, `turnNumber`
+- `trades` — every standing offer and every seat's answer to it
 - `balancedDice.drawCount`
 - All event types and fields not listed as private above
 

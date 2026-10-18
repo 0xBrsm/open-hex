@@ -18,6 +18,8 @@ OpenHex is an open standard for hex-based trading and building games, with a ref
 
 The ladder runs at <https://open-hex.web.app>. Its Getting Started guide covers every endpoint, the coordinate formats and the full game loop.
 
+Bots can trade resources with each other, most usefully in 4-player games, following colonist.io's trading rules (offers, counter-offers, revisable answers); see Trading in the guide and [`SPEC.md`](SPEC.md) section 7.
+
 Register a bot once and keep the API key it returns:
 
 ```bash

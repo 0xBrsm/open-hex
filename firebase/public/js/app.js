@@ -1266,8 +1266,32 @@ function renderGuide() {
     <h3>Resources</h3>
     <p>Five resource types: <code>wood</code>, <code>brick</code>, <code>sheep</code>,
        <code>wheat</code>, <code>ore</code>. The resource bank starts with 19 of each.</p>
+    <h3>Trading</h3>
+    <p>Bots trade resources with each other as on colonist.io, in both modes; in 4-player games three seats can answer
+       each offer. Trading is only ever with the player whose turn it is. Bank and port trades are separate
+       (<code>tradeWithBank</code>).</p>
+    <ol>
+      <li>After rolling, with nothing pending, the current player makes offers with <code>proposeTrade</code>.
+          Any number of offers may stand at once; an identical second offer is refused.</li>
+      <li>Every other seat may <code>acceptTrade</code> (it must hold the cards asked for), <code>rejectTrade</code>,
+          or make a <strong>counter-offer</strong>: a <code>proposeTrade</code> with <code>counterTo</code> set to the
+          offer's id, addressed to the current player only. Answers can change while the offer stands
+          (<code>withdrawTradeAnswer</code> takes one back).</li>
+      <li>The current player executes an offer with one seat that accepted it, or takes a counter-offer, with
+          <code>confirmTrade</code>. Both hands are checked again then.</li>
+      <li>An offer closes when it executes, when its creator cancels it, when every seat it was put to has
+          rejected it, or when the current player does anything else (builds, buys or plays a card, trades with
+          the bank, ends the turn).</li>
+    </ol>
+    <p>Answering is optional: offers never set <code>pendingAction</code> and never hold up the game. The state's
+       <code>trades</code> array lists the standing offers and every seat's answer; poll it on other players'
+       turns if you want to trade. Both sides of an offer must be non-empty and no resource may be on both sides.
+       See the <a href="#/events-reference">Events Reference</a> for the trade events.</p>
+
     <h3>Action Timeout</h3>
-    <p>You have <strong>60 seconds</strong> per action. If you miss the deadline the game is aborted.</p>
+    <p>You have <strong>60 seconds</strong> per action. If you miss the deadline the game is aborted.
+       The deadline belongs to the seat the game is waiting on; answering or countering another player's offer
+       does not reset it.</p>
 
     <h2 id="events">3. Parsing &amp; Responding to Game Events</h2>
     <h3>Game State</h3>
@@ -1290,6 +1314,7 @@ Authorization: Bearer your-api-key</pre>
       <li><strong>Opponent dev card purchases:</strong> <code>card</code> field removed for other players.</li>
       <li><strong>Steals:</strong> <code>resource</code> field hidden unless you are the stealer or victim.</li>
       <li><strong>Dev card deck:</strong> only <code>{"remaining": N}</code>, not the composition.</li>
+      <li><strong>Trades</strong> are public: every seat sees every offer, answer and executed trade.</li>
     </ul>
 
     <h3>Action Types</h3>
@@ -1307,6 +1332,13 @@ Authorization: Bearer your-api-key</pre>
       <tr><td><code>playYearOfPlenty</code></td><td><code>resources: ["wood","brick"]</code></td><td>Main</td></tr>
       <tr><td><code>playMonopoly</code></td><td><code>resource: "wheat"</code></td><td>Main</td></tr>
       <tr><td><code>tradeWithBank</code></td><td><code>offering: {res:n}, requesting: {res:n}</code></td><td>Main</td></tr>
+      <tr><td><code>proposeTrade</code></td><td><code>offering: {res:n}, requesting: {res:n}</code></td><td>Main, your turn</td></tr>
+      <tr><td><code>proposeTrade</code> (counter-offer)</td><td><code>counterTo: tradeId, offering, requesting</code></td><td>Main, another player's turn</td></tr>
+      <tr><td><code>acceptTrade</code></td><td><code>tradeId: int</code></td><td>Main, another player's turn</td></tr>
+      <tr><td><code>rejectTrade</code></td><td><code>tradeId: int</code></td><td>Main (others' offers, or a counter-offer to you)</td></tr>
+      <tr><td><code>withdrawTradeAnswer</code></td><td><code>tradeId: int</code></td><td>Main, another player's turn</td></tr>
+      <tr><td><code>confirmTrade</code></td><td><code>tradeId: int, partner: "blue"</code> (<code>partner</code> optional for a counter-offer)</td><td>Main, your turn</td></tr>
+      <tr><td><code>cancelTrade</code></td><td><code>tradeId: int</code> (your own offer)</td><td>Main</td></tr>
       <tr><td><code>moveRobber</code></td><td><code>hex: {x,y,z}</code> or <code>hex: int</code></td><td>After 7 / knight</td></tr>
       <tr><td><code>stealFromPlayer</code></td><td><code>target: "blue"</code></td><td>After robber move</td></tr>
       <tr><td><code>discardResources</code></td><td><code>resources: {res:n, ...}</code></td><td>After 7 (over limit)</td></tr>
@@ -1317,6 +1349,13 @@ Authorization: Bearer your-api-key</pre>
       and <code>location</code> (for hexes) are still accepted in actions. New code should use
       <code>edge</code> and <code>hex</code>.
     </div>
+    <p>Trade examples (the engine assigns each offer's <code>tradeId</code>; read it from the
+       <code>tradeProposed</code> event or <code>state.trades</code>):</p>
+    <pre>{"action": {"type": "proposeTrade", "offering": {"wood": 2}, "requesting": {"wheat": 1}}}       // red, on its turn
+{"action": {"type": "acceptTrade", "tradeId": 1}}                                                // blue
+{"action": {"type": "proposeTrade", "counterTo": 1, "offering": {"wheat": 1}, "requesting": {"wood": 3}}}  // white counters
+{"action": {"type": "confirmTrade", "tradeId": 1, "partner": "blue"}}                            // red executes with blue
+{"action": {"type": "confirmTrade", "tradeId": 2}}                                               // or takes white's counter</pre>
 
     <h3>Submitting Actions</h3>
     <pre>curl -X POST /api/games/{game_id}/actions \\
@@ -1339,6 +1378,12 @@ Authorization: Bearer your-api-key</pre>
       <tr><td><code>robberMoved</code></td><td>player, hex</td></tr>
       <tr><td><code>resourceStolen</code></td><td>player, target, resource (maybe hidden)</td></tr>
       <tr><td><code>bankTradeExecuted</code></td><td>player, offering, requesting</td></tr>
+      <tr><td><code>tradeProposed</code></td><td>player, tradeId, offering, requesting, counterTo (counter-offers only)</td></tr>
+      <tr><td><code>tradeAccepted</code></td><td>player, tradeId</td></tr>
+      <tr><td><code>tradeRejected</code></td><td>player, tradeId</td></tr>
+      <tr><td><code>tradeAnswerWithdrawn</code></td><td>player, tradeId</td></tr>
+      <tr><td><code>tradeExecuted</code></td><td>player (offer's creator, gave offering), partner, tradeId, offering, requesting</td></tr>
+      <tr><td><code>tradeCancelled</code></td><td>player (offer's creator), tradeId, reason</td></tr>
       <tr><td><code>turnEnded</code></td><td>player</td></tr>
       <tr><td><code>gameWon</code></td><td>player, victoryPoints</td></tr>
     </table>
@@ -1361,7 +1406,7 @@ Authorization: Bearer your-api-key</pre>
       <li><strong>Game loop</strong> (repeat until game ends):
         <ol style="list-style-type: lower-alpha;">
           <li>Get state: <code>GET /api/games/{id}/state</code></li>
-          <li>Check if it's your turn</li>
+          <li>Check if it's your turn (off your turn, you may answer offers in <code>state.trades</code>)</li>
           <li>Choose and submit an action: <code>POST /api/games/{id}/actions</code></li>
           <li>Poll events: <code>GET /api/games/{id}/events?after={last_seq}</code></li>
         </ol>
@@ -1425,6 +1470,7 @@ def play_game(game_id):
             requests.post(f"{API}/games/{game_id}/actions",
                           json={"action": action, "duration_ms": duration_ms},
                           headers=headers)
+        # Off your turn you may answer or counter the offers in state["trades"] (optional)
 
         events_resp = requests.get(
             f"{API}/games/{game_id}/events?after={last_seq}", headers=headers
@@ -1891,6 +1937,7 @@ function renderBoardSetup() {
       <tr><td><code>isSetupPhase</code></td><td>boolean</td><td>True during initial placement</td></tr>
       <tr><td><code>players</code></td><td>array</td><td>Player states (hand, dev cards, knights, etc.)</td></tr>
       <tr><td><code>pending</code></td><td>object|null</td><td>Pending action required (discard, robber move, steal, etc.)</td></tr>
+      <tr><td><code>trades</code></td><td>array</td><td>Standing offers between players: <code>tradeId</code>, <code>proposer</code>, <code>offering</code>, <code>requesting</code>, <code>accepting</code>, <code>rejected</code>, <code>counterTo</code></td></tr>
     </table>
 
     <h2>Terrain Types</h2>
@@ -2104,6 +2151,62 @@ function renderEventsReference() {
 }</pre>
 
     <h2>Trading Events</h2>
+    <p>Trades between players follow colonist.io's rules (see <a href="#/guide">Trading</a> in the guide).
+       Every offer produces one <code>tradeProposed</code> and ends with exactly one <code>tradeExecuted</code>
+       or <code>tradeCancelled</code>. All trading events are public.</p>
+
+    <h3>tradeProposed</h3>
+    <p>The current player made an offer to every other seat. The creator gives <code>offering</code> and receives
+       <code>requesting</code>.</p>
+    <pre>{
+  "type": "tradeProposed",
+  "player": "red",
+  "tradeId": 1,
+  "offering": {"wood": 2},
+  "requesting": {"wheat": 1}
+}</pre>
+    <p>A counter-offer from another seat carries <code>counterTo</code>, the offer it answers. It is addressed to
+       the current player only and executes as written.</p>
+    <pre>{
+  "type": "tradeProposed",
+  "player": "white",
+  "tradeId": 2,
+  "counterTo": 1,
+  "offering": {"wheat": 1},
+  "requesting": {"wood": 3}
+}</pre>
+
+    <h3>tradeAccepted</h3>
+    <p>A seat accepted an offer. It may still change its answer.</p>
+    <pre>{"type": "tradeAccepted", "player": "blue", "tradeId": 1}</pre>
+
+    <h3>tradeRejected</h3>
+    <p>A seat rejected an offer (or the current player rejected a counter-offer).</p>
+    <pre>{"type": "tradeRejected", "player": "orange", "tradeId": 1}</pre>
+
+    <h3>tradeAnswerWithdrawn</h3>
+    <p>A seat took back its acceptance or rejection.</p>
+    <pre>{"type": "tradeAnswerWithdrawn", "player": "blue", "tradeId": 1}</pre>
+
+    <h3>tradeExecuted</h3>
+    <p>The current player confirmed a trade. <code>player</code> is the offer's creator and gave
+       <code>offering</code>; <code>partner</code> gave <code>requesting</code>. For a counter-offer,
+       <code>player</code> is the seat that made it and <code>partner</code> the current player.</p>
+    <pre>{
+  "type": "tradeExecuted",
+  "player": "red",
+  "partner": "blue",
+  "tradeId": 1,
+  "offering": {"wood": 2},
+  "requesting": {"wheat": 1}
+}</pre>
+
+    <h3>tradeCancelled</h3>
+    <p>An offer closed without executing. <code>player</code> is the offer's creator. <code>reason</code> is
+       <code>"cancelled"</code> (its creator cancelled it), <code>"allRejected"</code> (every seat it was put to
+       rejected it) or <code>"currentPlayerMoved"</code> (the current player built, bought or played a card, traded
+       with the bank or ended the turn; these come before that action's own events).</p>
+    <pre>{"type": "tradeCancelled", "player": "red", "tradeId": 1, "reason": "allRejected"}</pre>
 
     <h3>bankTradeExecuted</h3>
     <p>A player traded with the bank (4:1, 3:1, or 2:1 with port).</p>
@@ -2168,6 +2271,12 @@ function renderEventsReference() {
       <tr><td><code>resourceStolen</code></td><td>player, target, resource (maybe hidden)</td><td>After robber</td></tr>
       <tr><td><code>resourcesDiscarded</code></td><td>player, resources</td><td>After 7</td></tr>
       <tr><td><code>bankTradeExecuted</code></td><td>player, offering, requesting</td><td>Main</td></tr>
+      <tr><td><code>tradeProposed</code></td><td>player, tradeId, offering, requesting, counterTo</td><td>Main</td></tr>
+      <tr><td><code>tradeAccepted</code></td><td>player, tradeId</td><td>Main</td></tr>
+      <tr><td><code>tradeRejected</code></td><td>player, tradeId</td><td>Main</td></tr>
+      <tr><td><code>tradeAnswerWithdrawn</code></td><td>player, tradeId</td><td>Main</td></tr>
+      <tr><td><code>tradeExecuted</code></td><td>player, partner, tradeId, offering, requesting</td><td>Main</td></tr>
+      <tr><td><code>tradeCancelled</code></td><td>player, tradeId, reason</td><td>Main</td></tr>
       <tr><td><code>longestRoadClaimed</code></td><td>player, length</td><td>Main</td></tr>
       <tr><td><code>largestArmyClaimed</code></td><td>player, knights</td><td>Main</td></tr>
       <tr><td><code>turnEnded</code></td><td>player, turnNumber</td><td>Main</td></tr>
