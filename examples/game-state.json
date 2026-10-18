@@ -1,0 +1,128 @@
+{
+  "config": {
+    "victoryPoints": 10,
+    "discardLimit": 7,
+    "numPlayers": 4,
+    "robberMode": "normal",
+    "diceMode": "random"
+  },
+  "board": {
+    "tiles": [
+      {"location": {"x": 0, "y": 0, "z": 0}, "terrain": "mountains", "number": 10},
+      {"location": {"x": 1, "y": -1, "z": 0}, "terrain": "forest", "number": 5},
+      {"location": {"x": 1, "y": 0, "z": -1}, "terrain": "hills", "number": 2},
+      {"location": {"x": 0, "y": 1, "z": -1}, "terrain": "pasture", "number": 6},
+      {"location": {"x": -1, "y": 1, "z": 0}, "terrain": "fields", "number": 3},
+      {"location": {"x": -1, "y": 0, "z": 1}, "terrain": "desert"},
+      {"location": {"x": 0, "y": -1, "z": 1}, "terrain": "forest", "number": 8},
+      {"location": {"x": 2, "y": -2, "z": 0}, "terrain": "fields", "number": 9},
+      {"location": {"x": 2, "y": -1, "z": -1}, "terrain": "pasture", "number": 12},
+      {"location": {"x": 2, "y": 0, "z": -2}, "terrain": "mountains", "number": 11},
+      {"location": {"x": 1, "y": 1, "z": -2}, "terrain": "forest", "number": 4},
+      {"location": {"x": 0, "y": 2, "z": -2}, "terrain": "hills", "number": 8},
+      {"location": {"x": -1, "y": 2, "z": -1}, "terrain": "fields", "number": 10},
+      {"location": {"x": -2, "y": 2, "z": 0}, "terrain": "pasture", "number": 9},
+      {"location": {"x": -2, "y": 1, "z": 1}, "terrain": "mountains", "number": 4},
+      {"location": {"x": -2, "y": 0, "z": 2}, "terrain": "pasture", "number": 5},
+      {"location": {"x": -1, "y": -1, "z": 2}, "terrain": "hills", "number": 6},
+      {"location": {"x": 0, "y": -2, "z": 2}, "terrain": "fields", "number": 3},
+      {"location": {"x": 1, "y": -2, "z": 1}, "terrain": "forest", "number": 11}
+    ],
+    "ports": [
+      {"vertices": [{"x": 1, "y": -2, "z": 2}, {"x": 2, "y": -2, "z": 1}], "rate": 3},
+      {"vertices": [{"x": 3, "y": -2, "z": 0}, {"x": 3, "y": -1, "z": -1}], "rate": 2, "resource": "wheat"},
+      {"vertices": [{"x": 3, "y": 0, "z": -2}, {"x": 2, "y": 1, "z": -2}], "rate": 2, "resource": "ore"},
+      {"vertices": [{"x": 1, "y": 2, "z": -2}, {"x": 0, "y": 2, "z": -1}], "rate": 3},
+      {"vertices": [{"x": -1, "y": 3, "z": -1}, {"x": -2, "y": 3, "z": 0}], "rate": 2, "resource": "sheep"},
+      {"vertices": [{"x": -2, "y": 2, "z": 1}, {"x": -3, "y": 2, "z": 1}], "rate": 3},
+      {"vertices": [{"x": 0, "y": -2, "z": 3}, {"x": 1, "y": -3, "z": 2}], "rate": 3},
+      {"vertices": [{"x": -3, "y": 1, "z": 2}, {"x": -2, "y": 0, "z": 3}], "rate": 2, "resource": "brick"},
+      {"vertices": [{"x": -1, "y": -1, "z": 3}, {"x": -2, "y": -1, "z": 3}], "rate": 2, "resource": "wood"}
+    ],
+    "robber": {"x": -1, "y": 2, "z": -1},
+    "settlements": [
+      {"vertex": {"x": 1, "y": 0, "z": 0}, "player": "red"},
+      {"vertex": {"x": 0, "y": 0, "z": 1}, "player": "blue"},
+      {"vertex": {"x": -1, "y": 1, "z": 1}, "player": "white"},
+      {"vertex": {"x": 2, "y": -1, "z": 0}, "player": "orange"},
+      {"vertex": {"x": 0, "y": 1, "z": 0}, "player": "red"},
+      {"vertex": {"x": -1, "y": 2, "z": 0}, "player": "blue"},
+      {"vertex": {"x": 1, "y": 1, "z": -1}, "player": "white"},
+      {"vertex": {"x": 0, "y": -1, "z": 2}, "player": "orange"}
+    ],
+    "cities": [
+      {"vertex": {"x": 0, "y": 1, "z": 0}, "player": "red"}
+    ],
+    "roads": [
+      {"vertices": [{"x": 1, "y": 0, "z": 0}, {"x": 1, "y": 0, "z": 1}], "player": "red"},
+      {"vertices": [{"x": 0, "y": 1, "z": 0}, {"x": 1, "y": 1, "z": 0}], "player": "red"},
+      {"vertices": [{"x": 1, "y": 0, "z": 0}, {"x": 1, "y": 1, "z": 0}], "player": "red"},
+      {"vertices": [{"x": 0, "y": 0, "z": 1}, {"x": 0, "y": 1, "z": 1}], "player": "blue"},
+      {"vertices": [{"x": -1, "y": 2, "z": 0}, {"x": 0, "y": 2, "z": 0}], "player": "blue"},
+      {"vertices": [{"x": -1, "y": 1, "z": 1}, {"x": -1, "y": 1, "z": 0}], "player": "white"},
+      {"vertices": [{"x": 1, "y": 1, "z": -1}, {"x": 1, "y": 1, "z": 0}], "player": "white"},
+      {"vertices": [{"x": 2, "y": -1, "z": 0}, {"x": 2, "y": -1, "z": 1}], "player": "orange"},
+      {"vertices": [{"x": 0, "y": -1, "z": 2}, {"x": 0, "y": -1, "z": 1}], "player": "orange"}
+    ]
+  },
+  "bank": {"wood": 16, "brick": 17, "sheep": 14, "wheat": 15, "ore": 18},
+  "devCardDeck": {"knight": 12, "victoryPoint": 5, "roadBuilding": 2, "yearOfPlenty": 2, "monopoly": 1},
+  "players": [
+    {
+      "color": "red",
+      "hand": {"wood": 1, "brick": 2, "sheep": 1, "wheat": 3, "ore": 1},
+      "devCards": {"knight": 1},
+      "devCardsBoughtThisTurn": {},
+      "playedDevCards": {"knight": 1},
+      "knightsPlayed": 1,
+      "longestRoadLength": 3,
+      "victoryPoints": 5,
+      "publicVictoryPoints": 5
+    },
+    {
+      "color": "blue",
+      "hand": {"wood": 2, "sheep": 3},
+      "devCards": {},
+      "devCardsBoughtThisTurn": {},
+      "playedDevCards": {},
+      "knightsPlayed": 0,
+      "longestRoadLength": 1,
+      "victoryPoints": 3,
+      "publicVictoryPoints": 3
+    },
+    {
+      "color": "white",
+      "hand": {"brick": 1, "wheat": 1, "ore": 2},
+      "devCards": {"victoryPoint": 1},
+      "devCardsBoughtThisTurn": {},
+      "playedDevCards": {"knight": 1},
+      "knightsPlayed": 1,
+      "longestRoadLength": 1,
+      "victoryPoints": 4,
+      "publicVictoryPoints": 3
+    },
+    {
+      "color": "orange",
+      "hand": {"wood": 1, "ore": 1},
+      "devCards": {},
+      "devCardsBoughtThisTurn": {},
+      "playedDevCards": {},
+      "knightsPlayed": 0,
+      "longestRoadLength": 1,
+      "victoryPoints": 2,
+      "publicVictoryPoints": 2
+    }
+  ],
+  "currentPlayer": "red",
+  "turnOrder": ["red", "blue", "white", "orange"],
+  "turnNumber": 8,
+  "isSetupPhase": false,
+  "dice": {"die1": 5, "die2": 5},
+  "pendingAction": null,
+  "playedDevCardThisTurn": false,
+  "trades": [],
+  "tradesProposedThisTurn": 0,
+  "longestRoadPlayer": "red",
+  "largestArmyPlayer": null,
+  "winner": null
+}

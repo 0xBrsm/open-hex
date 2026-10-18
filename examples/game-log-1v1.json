@@ -1,0 +1,68 @@
+{
+  "openhex": "0.1",
+  "config": {
+    "victoryPoints": 15,
+    "discardLimit": 9,
+    "numPlayers": 2,
+    "robberMode": "friendly",
+    "diceMode": "balanced"
+  },
+  "board": {
+    "tiles": [
+      {"location": {"x": 0, "y": 0, "z": 0}, "terrain": "desert"},
+      {"location": {"x": 1, "y": -1, "z": 0}, "terrain": "forest", "number": 5},
+      {"location": {"x": 1, "y": 0, "z": -1}, "terrain": "hills", "number": 2},
+      {"location": {"x": 0, "y": 1, "z": -1}, "terrain": "pasture", "number": 6},
+      {"location": {"x": -1, "y": 1, "z": 0}, "terrain": "fields", "number": 3},
+      {"location": {"x": -1, "y": 0, "z": 1}, "terrain": "mountains", "number": 8},
+      {"location": {"x": 0, "y": -1, "z": 1}, "terrain": "forest", "number": 10},
+      {"location": {"x": 2, "y": -2, "z": 0}, "terrain": "fields", "number": 9},
+      {"location": {"x": 2, "y": -1, "z": -1}, "terrain": "pasture", "number": 12},
+      {"location": {"x": 2, "y": 0, "z": -2}, "terrain": "mountains", "number": 11},
+      {"location": {"x": 1, "y": 1, "z": -2}, "terrain": "forest", "number": 4},
+      {"location": {"x": 0, "y": 2, "z": -2}, "terrain": "hills", "number": 8},
+      {"location": {"x": -1, "y": 2, "z": -1}, "terrain": "fields", "number": 10},
+      {"location": {"x": -2, "y": 2, "z": 0}, "terrain": "pasture", "number": 9},
+      {"location": {"x": -2, "y": 1, "z": 1}, "terrain": "mountains", "number": 4},
+      {"location": {"x": -2, "y": 0, "z": 2}, "terrain": "pasture", "number": 5},
+      {"location": {"x": -1, "y": -1, "z": 2}, "terrain": "hills", "number": 6},
+      {"location": {"x": 0, "y": -2, "z": 2}, "terrain": "fields", "number": 3},
+      {"location": {"x": 1, "y": -2, "z": 1}, "terrain": "forest", "number": 11}
+    ],
+    "ports": [
+      {"vertices": [{"x": 1, "y": -2, "z": 2}, {"x": 2, "y": -2, "z": 1}], "rate": 3},
+      {"vertices": [{"x": 3, "y": -2, "z": 0}, {"x": 3, "y": -1, "z": -1}], "rate": 2, "resource": "wheat"},
+      {"vertices": [{"x": 3, "y": 0, "z": -2}, {"x": 2, "y": 1, "z": -2}], "rate": 2, "resource": "ore"},
+      {"vertices": [{"x": 1, "y": 2, "z": -2}, {"x": 0, "y": 2, "z": -1}], "rate": 3},
+      {"vertices": [{"x": -1, "y": 3, "z": -1}, {"x": -2, "y": 3, "z": 0}], "rate": 2, "resource": "sheep"},
+      {"vertices": [{"x": -2, "y": 2, "z": 1}, {"x": -3, "y": 2, "z": 1}], "rate": 3},
+      {"vertices": [{"x": 0, "y": -2, "z": 3}, {"x": 1, "y": -3, "z": 2}], "rate": 3},
+      {"vertices": [{"x": -3, "y": 1, "z": 2}, {"x": -2, "y": 0, "z": 3}], "rate": 2, "resource": "brick"},
+      {"vertices": [{"x": -1, "y": -1, "z": 3}, {"x": -2, "y": -1, "z": 3}], "rate": 2, "resource": "wood"}
+    ],
+    "robber": {"x": 0, "y": 0, "z": 0}
+  },
+  "turnOrder": ["red", "blue"],
+  "events": [
+    {"type": "setupSettlementPlaced", "player": "red", "vertex": {"x": 1, "y": 0, "z": 0}},
+    {"type": "setupRoadPlaced", "player": "red", "vertices": [{"x": 1, "y": 0, "z": 0}, {"x": 1, "y": 0, "z": 1}]},
+    {"type": "setupSettlementPlaced", "player": "blue", "vertex": {"x": 0, "y": 0, "z": 1}},
+    {"type": "setupRoadPlaced", "player": "blue", "vertices": [{"x": 0, "y": 0, "z": 1}, {"x": 0, "y": 1, "z": 1}]},
+    {"type": "setupSettlementPlaced", "player": "blue", "vertex": {"x": -1, "y": 1, "z": 1}},
+    {"type": "setupRoadPlaced", "player": "blue", "vertices": [{"x": -1, "y": 1, "z": 1}, {"x": -1, "y": 1, "z": 0}]},
+    {"type": "setupResourcesGranted", "player": "blue", "resources": {"ore": 1, "sheep": 1}},
+    {"type": "setupSettlementPlaced", "player": "red", "vertex": {"x": 0, "y": 1, "z": 0}},
+    {"type": "setupRoadPlaced", "player": "red", "vertices": [{"x": 0, "y": 1, "z": 0}, {"x": 1, "y": 1, "z": 0}]},
+    {"type": "setupResourcesGranted", "player": "red", "resources": {"sheep": 1, "wheat": 1}},
+
+    {"type": "diceRolled", "player": "red", "die1": 3, "die2": 5},
+    {"type": "resourcesProduced", "diceTotal": 8, "production": {"red": {"ore": 1}}},
+    {"type": "turnEnded", "player": "red", "turnNumber": 1},
+
+    {"type": "diceRolled", "player": "blue", "die1": 2, "die2": 4},
+    {"type": "resourcesProduced", "diceTotal": 6, "production": {"blue": {"wood": 1}}},
+    {"type": "bankTradeExecuted", "player": "blue", "offering": {"ore": 4}, "requesting": {"brick": 1}},
+    {"type": "roadBuilt", "player": "blue", "vertices": [{"x": -1, "y": 1, "z": 0}, {"x": -1, "y": 2, "z": 0}]},
+    {"type": "turnEnded", "player": "blue", "turnNumber": 2}
+  ]
+}

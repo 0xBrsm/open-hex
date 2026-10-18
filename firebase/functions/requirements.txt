@@ -1,0 +1,6 @@
+firebase-functions>=0.4
+firebase-admin>=6.0
+flask>=3.0
+pydantic>=2.0
+google-cloud-storage>=2.0
+google-cloud-firestore>=2.0

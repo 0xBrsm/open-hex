@@ -1,0 +1,579 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openhex.org/schema/v0.1/openhex.json",
+  "title": "OpenHex Game Format",
+  "description": "JSON Schema for the OpenHex open standard for hex-based board games (base game rules).",
+
+  "$defs": {
+
+    "HexPoint": {
+      "type": "object",
+      "description": "Cube coordinate for a hex tile center. Constraint: x + y + z = 0.",
+      "properties": {
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "z": { "type": "integer" }
+      },
+      "required": ["x", "y", "z"],
+      "additionalProperties": false
+    },
+
+    "VertexPoint": {
+      "type": "object",
+      "description": "Cube coordinate for a vertex (corner). Type A: x+y+z=1, Type B: x+y+z=2.",
+      "properties": {
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "z": { "type": "integer" }
+      },
+      "required": ["x", "y", "z"],
+      "additionalProperties": false
+    },
+
+    "Edge": {
+      "type": "array",
+      "description": "An edge between two adjacent vertices, represented as [typeA, typeB].",
+      "items": { "$ref": "#/$defs/VertexPoint" },
+      "minItems": 2,
+      "maxItems": 2
+    },
+
+    "Terrain": {
+      "type": "string",
+      "enum": ["desert", "forest", "hills", "pasture", "fields", "mountains"]
+    },
+
+    "Resource": {
+      "type": "string",
+      "enum": ["wood", "brick", "sheep", "wheat", "ore"]
+    },
+
+    "PlayerColor": {
+      "type": "string",
+      "enum": ["red", "blue", "white", "orange"]
+    },
+
+    "DevCard": {
+      "type": "string",
+      "enum": ["knight", "victoryPoint", "roadBuilding", "yearOfPlenty", "monopoly"]
+    },
+
+    "RobberMode": {
+      "type": "string",
+      "enum": ["normal", "friendly"],
+      "description": "friendly: robber cannot block players at starting VP count (2 VP)."
+    },
+
+    "DiceMode": {
+      "type": "string",
+      "enum": ["random", "balanced"],
+      "description": "balanced: uses a 36-card deck reshuffled every 25 draws."
+    },
+
+    "ResourceMap": {
+      "type": "object",
+      "description": "Map of resource name to count. Zero-count entries are omitted.",
+      "propertyNames": { "$ref": "#/$defs/Resource" },
+      "additionalProperties": { "type": "integer", "minimum": 1 }
+    },
+
+    "DevCardMap": {
+      "type": "object",
+      "description": "Map of dev card name to count. Zero-count entries are omitted.",
+      "propertyNames": { "$ref": "#/$defs/DevCard" },
+      "additionalProperties": { "type": "integer", "minimum": 1 }
+    },
+
+    "Tile": {
+      "type": "object",
+      "properties": {
+        "location": { "$ref": "#/$defs/HexPoint" },
+        "terrain": { "$ref": "#/$defs/Terrain" },
+        "number": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 12,
+          "description": "Dice number token. Absent for desert tiles."
+        }
+      },
+      "required": ["location", "terrain"],
+      "additionalProperties": false
+    },
+
+    "Port": {
+      "type": "object",
+      "properties": {
+        "vertices": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/VertexPoint" },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "The two vertices that form this port's edge."
+        },
+        "rate": {
+          "type": "integer",
+          "enum": [2, 3],
+          "description": "Trade rate: 2 for specific resource, 3 for generic."
+        },
+        "resource": {
+          "$ref": "#/$defs/Resource",
+          "description": "Required resource for 2:1 ports. Absent for 3:1 generic ports."
+        }
+      },
+      "required": ["vertices", "rate"],
+      "additionalProperties": false
+    },
+
+    "VertexBuilding": {
+      "type": "object",
+      "description": "A settlement or city on a vertex.",
+      "properties": {
+        "vertex": { "$ref": "#/$defs/VertexPoint" },
+        "player": { "$ref": "#/$defs/PlayerColor" }
+      },
+      "required": ["vertex", "player"],
+      "additionalProperties": false
+    },
+
+    "Road": {
+      "type": "object",
+      "properties": {
+        "vertices": { "$ref": "#/$defs/Edge" },
+        "player": { "$ref": "#/$defs/PlayerColor" }
+      },
+      "required": ["vertices", "player"],
+      "additionalProperties": false
+    },
+
+    "Board": {
+      "type": "object",
+      "properties": {
+        "tiles": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Tile" }
+        },
+        "ports": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Port" }
+        },
+        "robber": {
+          "$ref": "#/$defs/HexPoint",
+          "description": "Current robber location. Absent if no robber on board."
+        },
+        "settlements": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/VertexBuilding" },
+          "default": []
+        },
+        "cities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/VertexBuilding" },
+          "default": []
+        },
+        "roads": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Road" },
+          "default": []
+        }
+      },
+      "required": ["tiles", "ports"],
+      "additionalProperties": false
+    },
+
+    "GameConfig": {
+      "type": "object",
+      "properties": {
+        "victoryPoints": {
+          "type": "integer",
+          "default": 10,
+          "description": "VP needed to win. Standard: 10, 1v1: 15."
+        },
+        "discardLimit": {
+          "type": "integer",
+          "default": 7,
+          "description": "Max hand size before discard on 7. Standard: 7, 1v1: 9."
+        },
+        "numPlayers": {
+          "type": "integer",
+          "enum": [2, 3, 4],
+          "default": 4
+        },
+        "robberMode": {
+          "$ref": "#/$defs/RobberMode",
+          "default": "normal"
+        },
+        "diceMode": {
+          "$ref": "#/$defs/DiceMode",
+          "default": "random"
+        },
+        "maxSettlements": {
+          "type": "integer",
+          "default": 5
+        },
+        "maxCities": {
+          "type": "integer",
+          "default": 4
+        },
+        "maxRoads": {
+          "type": "integer",
+          "default": 15
+        }
+      },
+      "required": ["victoryPoints", "numPlayers"],
+      "additionalProperties": false
+    },
+
+    "DiceResult": {
+      "type": "object",
+      "properties": {
+        "die1": { "type": "integer", "minimum": 1, "maximum": 6 },
+        "die2": { "type": "integer", "minimum": 1, "maximum": 6 }
+      },
+      "required": ["die1", "die2"],
+      "additionalProperties": false
+    },
+
+    "PendingAction": {
+      "type": "object",
+      "description": "A pending action that must be resolved before normal play continues.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "moveRobber", "stealFromPlayer", "discardResources",
+            "placeFreeRoad", "placeInitialRoad"
+          ]
+        },
+        "players": {
+          "type": "object",
+          "description": "Map of PlayerColor to discard count (for discardResources).",
+          "propertyNames": { "$ref": "#/$defs/PlayerColor" },
+          "additionalProperties": { "type": "integer" }
+        },
+        "location": {
+          "$ref": "#/$defs/HexPoint",
+          "description": "Robber location (for stealFromPlayer)."
+        },
+        "targets": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PlayerColor" },
+          "description": "Valid steal targets."
+        },
+        "remaining": {
+          "type": "integer",
+          "description": "Free roads remaining (for placeFreeRoad)."
+        }
+      },
+      "required": ["type"],
+      "additionalProperties": false
+    },
+
+    "Trade": {
+      "type": "object",
+      "properties": {
+        "tradeId": { "type": "integer" },
+        "proposer": { "$ref": "#/$defs/PlayerColor" },
+        "offering": { "$ref": "#/$defs/ResourceMap" },
+        "requesting": { "$ref": "#/$defs/ResourceMap" },
+        "accepting": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PlayerColor" },
+          "description": "Players who have accepted."
+        },
+        "rejected": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PlayerColor" },
+          "description": "Players who have rejected."
+        }
+      },
+      "required": ["tradeId", "proposer", "offering", "requesting"],
+      "additionalProperties": false
+    },
+
+    "PlayerState": {
+      "type": "object",
+      "properties": {
+        "color": { "$ref": "#/$defs/PlayerColor" },
+        "hand": { "$ref": "#/$defs/ResourceMap" },
+        "devCards": { "$ref": "#/$defs/DevCardMap" },
+        "devCardsBoughtThisTurn": { "$ref": "#/$defs/DevCardMap" },
+        "playedDevCards": { "$ref": "#/$defs/DevCardMap" },
+        "knightsPlayed": { "type": "integer", "default": 0 },
+        "longestRoadLength": { "type": "integer", "default": 0 }
+      },
+      "required": ["color"],
+      "additionalProperties": false
+    },
+
+    "PlayerStateFiltered": {
+      "type": "object",
+      "description": "Opponent player state with hidden information removed.",
+      "properties": {
+        "color": { "$ref": "#/$defs/PlayerColor" },
+        "hand": { "type": "object", "const": {} },
+        "handSize": { "type": "integer", "description": "Total cards in hand." },
+        "devCards": { "type": "object", "const": {} },
+        "devCardCount": { "type": "integer", "description": "Total dev cards held." },
+        "devCardsBoughtThisTurn": { "type": "object", "const": {} },
+        "playedDevCards": { "$ref": "#/$defs/DevCardMap" },
+        "knightsPlayed": { "type": "integer" },
+        "longestRoadLength": { "type": "integer" }
+      },
+      "required": ["color"],
+      "additionalProperties": false
+    },
+
+    "BalancedDice": {
+      "type": "object",
+      "description": "State for balanced dice mode (36-card deck, reshuffled every 25 draws).",
+      "properties": {
+        "deck": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": { "type": "integer", "minimum": 1, "maximum": 6 },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "drawCount": { "type": "integer" }
+      },
+      "required": ["deck", "drawCount"],
+      "additionalProperties": false
+    },
+
+    "GameState": {
+      "type": "object",
+      "properties": {
+        "config": { "$ref": "#/$defs/GameConfig" },
+        "board": { "$ref": "#/$defs/Board" },
+        "bank": { "$ref": "#/$defs/ResourceMap" },
+        "devCardDeck": { "$ref": "#/$defs/DevCardMap" },
+        "players": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PlayerState" }
+        },
+        "currentPlayer": {
+          "oneOf": [
+            { "$ref": "#/$defs/PlayerColor" },
+            { "type": "null" }
+          ]
+        },
+        "turnOrder": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PlayerColor" }
+        },
+        "turnNumber": { "type": "integer" },
+        "isSetupPhase": { "type": "boolean" },
+        "dice": {
+          "oneOf": [
+            { "$ref": "#/$defs/DiceResult" },
+            { "type": "null" }
+          ]
+        },
+        "pendingAction": {
+          "oneOf": [
+            { "$ref": "#/$defs/PendingAction" },
+            { "type": "null" }
+          ]
+        },
+        "playedDevCardThisTurn": { "type": "boolean" },
+        "trades": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Trade" }
+        },
+        "tradesProposedThisTurn": { "type": "integer" },
+        "longestRoadPlayer": {
+          "oneOf": [
+            { "$ref": "#/$defs/PlayerColor" },
+            { "type": "null" }
+          ]
+        },
+        "largestArmyPlayer": {
+          "oneOf": [
+            { "$ref": "#/$defs/PlayerColor" },
+            { "type": "null" }
+          ]
+        },
+        "winner": {
+          "oneOf": [
+            { "$ref": "#/$defs/PlayerColor" },
+            { "type": "null" }
+          ]
+        },
+        "nextTradeId": { "type": "integer" },
+        "setupRound": { "type": "integer" },
+        "setupIndex": { "type": "integer" },
+        "setupPlacedSettlement": { "type": "boolean" },
+        "lastSetupSettlement": { "$ref": "#/$defs/VertexPoint" },
+        "balancedDice": { "$ref": "#/$defs/BalancedDice" }
+      },
+      "required": ["config", "board", "players", "turnOrder"],
+      "additionalProperties": false
+    },
+
+    "ActionType": {
+      "type": "string",
+      "enum": [
+        "placeInitialSettlement",
+        "placeInitialRoad",
+        "rollDice",
+        "buildRoad",
+        "buildSettlement",
+        "buildCity",
+        "buyDevCard",
+        "playKnight",
+        "playRoadBuilding",
+        "playYearOfPlenty",
+        "playMonopoly",
+        "proposeTrade",
+        "acceptTrade",
+        "rejectTrade",
+        "confirmTrade",
+        "cancelTrade",
+        "tradeWithBank",
+        "moveRobber",
+        "stealFromPlayer",
+        "discardResources",
+        "placeFreeRoad",
+        "endTurn"
+      ]
+    },
+
+    "Action": {
+      "type": "object",
+      "description": "A player action. Fields required depend on the action type.",
+      "properties": {
+        "type": { "$ref": "#/$defs/ActionType" },
+        "player": { "$ref": "#/$defs/PlayerColor" },
+        "vertex": { "$ref": "#/$defs/VertexPoint" },
+        "vertices": { "$ref": "#/$defs/Edge" },
+        "location": { "$ref": "#/$defs/HexPoint" },
+        "target": { "$ref": "#/$defs/PlayerColor" },
+        "partner": { "$ref": "#/$defs/PlayerColor" },
+        "resource": { "$ref": "#/$defs/Resource" },
+        "resources": {
+          "description": "Either a list of resources (yearOfPlenty) or a ResourceMap (discard).",
+          "oneOf": [
+            { "type": "array", "items": { "$ref": "#/$defs/Resource" } },
+            { "$ref": "#/$defs/ResourceMap" }
+          ]
+        },
+        "tradeId": { "type": "integer" },
+        "offering": { "$ref": "#/$defs/ResourceMap" },
+        "requesting": { "$ref": "#/$defs/ResourceMap" }
+      },
+      "required": ["type", "player"],
+      "additionalProperties": false
+    },
+
+    "EventType": {
+      "type": "string",
+      "enum": [
+        "setupSettlement",
+        "setupRoad",
+        "setupResourceGrant",
+        "diceRoll",
+        "resourceProduction",
+        "noProduction",
+        "roadBuilt",
+        "settlementBuilt",
+        "cityBuilt",
+        "devCardBought",
+        "knightPlayed",
+        "robberMoved",
+        "resourceStolen",
+        "nothingToSteal",
+        "roadBuildingPlayed",
+        "freeRoadPlaced",
+        "yearOfPlentyPlayed",
+        "monopolyPlayed",
+        "tradeProposed",
+        "tradeAccepted",
+        "tradeRejected",
+        "tradeConfirmed",
+        "tradeCancelled",
+        "bankTrade",
+        "discardedResources",
+        "longestRoad",
+        "largestArmy",
+        "turnStarted",
+        "gameWon"
+      ]
+    },
+
+    "Event": {
+      "type": "object",
+      "description": "A game event. Fields present depend on the event type.",
+      "properties": {
+        "type": { "$ref": "#/$defs/EventType" },
+        "player": { "$ref": "#/$defs/PlayerColor" },
+        "vertex": { "$ref": "#/$defs/VertexPoint" },
+        "vertices": { "$ref": "#/$defs/Edge" },
+        "die1": { "type": "integer", "minimum": 1, "maximum": 6 },
+        "die2": { "type": "integer", "minimum": 1, "maximum": 6 },
+        "diceTotal": { "type": "integer", "minimum": 2, "maximum": 12 },
+        "resources": {
+          "description": "Either a ResourceMap or a list of resources, depending on event type.",
+          "oneOf": [
+            { "$ref": "#/$defs/ResourceMap" },
+            { "type": "array", "items": { "$ref": "#/$defs/Resource" } }
+          ]
+        },
+        "resource": { "$ref": "#/$defs/Resource" },
+        "production": {
+          "type": "object",
+          "description": "Map of PlayerColor to ResourceMap for resource production events.",
+          "propertyNames": { "$ref": "#/$defs/PlayerColor" },
+          "additionalProperties": { "$ref": "#/$defs/ResourceMap" }
+        },
+        "card": { "$ref": "#/$defs/DevCard" },
+        "location": { "$ref": "#/$defs/HexPoint" },
+        "target": { "$ref": "#/$defs/PlayerColor" },
+        "partner": { "$ref": "#/$defs/PlayerColor" },
+        "tradeId": { "type": "integer" },
+        "offering": { "$ref": "#/$defs/ResourceMap" },
+        "requesting": { "$ref": "#/$defs/ResourceMap" },
+        "collected": {
+          "type": "object",
+          "description": "Map of PlayerColor to count (for monopoly).",
+          "propertyNames": { "$ref": "#/$defs/PlayerColor" },
+          "additionalProperties": { "type": "integer" }
+        },
+        "length": { "type": "integer", "description": "Road length (longestRoad event)." },
+        "knights": { "type": "integer", "description": "Knight count (largestArmy event)." },
+        "turnNumber": { "type": "integer" },
+        "victoryPoints": { "type": "integer" }
+      },
+      "required": ["type"],
+      "additionalProperties": false
+    },
+
+    "GameLog": {
+      "type": "object",
+      "description": "Complete game log for replay/archival. Contains initial board + all events.",
+      "properties": {
+        "openhex": {
+          "type": "string",
+          "const": "0.1",
+          "description": "Format version."
+        },
+        "config": { "$ref": "#/$defs/GameConfig" },
+        "board": {
+          "$ref": "#/$defs/Board",
+          "description": "Initial board state (tiles, ports, robber). No buildings or roads."
+        },
+        "turnOrder": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PlayerColor" }
+        },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Event" }
+        }
+      },
+      "required": ["openhex", "config", "board", "turnOrder", "events"],
+      "additionalProperties": false
+    }
+  }
+}
