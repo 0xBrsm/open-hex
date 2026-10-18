@@ -309,6 +309,8 @@ def _update_ratings(game_id: str) -> None:
     elo_key = "elo1v1" if mode == "1v1" else "elo4p"
     games_key = "games1v1" if mode == "1v1" else "games4p"
     wins_key = "wins1v1" if mode == "1v1" else "wins4p"
+    # The leaderboard hides bots whose last game is more than 30 days old
+    last_game_at = game.get("completedAt") or _now_iso()
 
     # Read current bot ratings
     bot_docs = {}
@@ -336,6 +338,7 @@ def _update_ratings(game_id: str) -> None:
                 games_key: bot_data.get(games_key, 0) + 1,
                 wins_key: bot_data.get(wins_key, 0) + (1 if is_winner else 0),
                 "lastOpponentId": opp["botId"],
+                "lastGameAt": last_game_at,
             })
     else:
         # 4p
@@ -363,6 +366,7 @@ def _update_ratings(game_id: str) -> None:
                 elo_key: new_r,
                 games_key: bot_data.get(games_key, 0) + 1,
                 wins_key: bot_data.get(wins_key, 0) + (1 if is_winner else 0),
+                "lastGameAt": last_game_at,
             })
 
 

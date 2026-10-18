@@ -61,6 +61,15 @@ tr:hover { background: rgba(255,255,255,0.03); }
   border: 1px solid var(--border); font-size: 0.85rem; cursor: pointer;
 }
 .loading { text-align: center; padding: 2rem; color: var(--muted); }
+.table-scroll { overflow-x: auto; }
+.lb-filter {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+  flex-wrap: wrap; margin-bottom: 0.75rem; color: var(--muted); font-size: 0.85rem;
+}
+.lb-filter a {
+  padding: 0.3rem 0.75rem; border-radius: 0.25rem; background: var(--bg);
+  border: 1px solid var(--border); font-size: 0.85rem;
+}
 
 /* Guide styles */
 .guide h2 {

@@ -45,7 +45,7 @@ function route() {
     renderHome();
   } else if (parts[0] === "leaderboard" && parts[1]) {
     renderNav(parts[1]);
-    renderLeaderboard(parts[1]);
+    renderLeaderboard(parts[1], parts[2] === "all");
   } else if (parts[0] === "bots" && parts[1]) {
     renderNav("");
     renderBotDetail(parts[1]);
@@ -114,6 +114,15 @@ function timeAgo(ts) {
   const months = Math.floor(days / 30);
   if (months < 12) return `${months}mo ago`;
   return `${Math.floor(months / 12)}y ago`;
+}
+
+// Leaderboards only show bots that played within this many days, unless "See all" is on
+const ACTIVE_DAYS = 30;
+
+function playedRecently(bot) {
+  if (!bot.lastGameAt) return false;
+  const t = new Date(bot.lastGameAt).getTime();
+  return !isNaN(t) && Date.now() - t <= ACTIVE_DAYS * 24 * 60 * 60 * 1000;
 }
 
 function toggleLabels(svgId, btn, mode) {
@@ -664,8 +673,8 @@ async function renderHome() {
 
   // Top 5 per mode
   const [top1v1, top4p, recentGames] = await Promise.all([
-    db.collection("bots").where("mode", "==", "1v1").orderBy("elo1v1", "desc").limit(5).get(),
-    db.collection("bots").where("mode", "==", "4p").orderBy("elo4p", "desc").limit(5).get(),
+    db.collection("bots").where("mode", "==", "1v1").orderBy("elo1v1", "desc").limit(100).get(),
+    db.collection("bots").where("mode", "==", "4p").orderBy("elo4p", "desc").limit(100).get(),
     db.collection("games")
       .where("status", "in", ["completed", "aborted"])
       .orderBy("completedAt", "desc")
@@ -673,8 +682,10 @@ async function renderHome() {
       .get(),
   ]);
 
-  function miniLb(docs, eloKey, gamesKey, winsKey) {
-    if (docs.empty) return '<p class="empty">No bots registered yet</p>';
+  function miniLb(snap, eloKey, gamesKey, winsKey) {
+    if (snap.empty) return '<p class="empty">No bots registered yet</p>';
+    const docs = snap.docs.filter((doc) => playedRecently(doc.data())).slice(0, 5);
+    if (docs.length === 0) return `<p class="empty">No bots have played in the last ${ACTIVE_DAYS} days</p>`;
     let html = "<table><tr><th>#</th><th>Bot</th><th>ELO</th><th>W/L</th></tr>";
     let rank = 0;
     docs.forEach((doc) => {
@@ -736,7 +747,7 @@ async function renderHome() {
 // Leaderboard
 // ---------------------------------------------------------------------------
 
-async function renderLeaderboard(mode) {
+async function renderLeaderboard(mode, showAll) {
   if (mode !== "1v1" && mode !== "4p") {
     $app.innerHTML = '<p class="empty">Invalid mode</p>';
     return;
@@ -763,7 +774,7 @@ async function renderLeaderboard(mode) {
   let activeHtml = "";
   if (!activeSnap.empty) {
     activeHtml = '<div class="card" style="margin-bottom:1rem"><h2>Active Games</h2>';
-    activeHtml += '<table><tr><th>Game</th><th>Players</th><th>Turn</th><th>Started</th></tr>';
+    activeHtml += '<div class="table-scroll"><table><tr><th>Game</th><th>Players</th><th>Turn</th><th>Started</th></tr>';
     activeSnap.forEach((doc) => {
       const g = doc.data();
       const players = (g.players || [])
@@ -776,18 +787,26 @@ async function renderLeaderboard(mode) {
         <td style="color:var(--muted); font-size:0.85rem">${timeAgo(g.createdAt)}</td>
       </tr>`;
     });
-    activeHtml += '</table></div>';
+    activeHtml += '</table></div></div>';
   }
+
+  const base = `#/leaderboard/${mode}`;
+  const shown = showAll ? docs.docs : docs.docs.filter((doc) => playedRecently(doc.data()));
+  const filterBar = showAll
+    ? `<div class="lb-filter">All bots. <a href="${base}">Active only</a></div>`
+    : `<div class="lb-filter">Bots that played in the last ${ACTIVE_DAYS} days. <a href="${base}/all">See all</a></div>`;
 
   let table = "";
   if (docs.empty) {
     table =
       '<p class="empty">No bots registered yet. <a href="#/guide">Check the guide</a> to get started!</p>';
+  } else if (shown.length === 0) {
+    table = `<p class="empty">No bots have played a ${esc(mode)} game in the last ${ACTIVE_DAYS} days.</p>`;
   } else {
     table =
-      "<table><tr><th>#</th><th>Bot</th><th>ELO</th><th>Games</th><th>Wins</th><th>Win Rate</th></tr>";
+      '<div class="table-scroll"><table><tr><th>#</th><th>Bot</th><th>ELO</th><th>Games</th><th>Wins</th><th>Win Rate</th><th>Last Game</th></tr>';
     let rank = 0;
-    docs.forEach((doc) => {
+    shown.forEach((doc) => {
       rank++;
       const d = doc.data();
       const g = d[gamesKey] || 0;
@@ -798,9 +817,10 @@ async function renderLeaderboard(mode) {
         <td><a href="#/bots/${doc.id}">${esc(d.name)}</a></td>
         <td><strong>${fmtElo(d[eloKey])}</strong></td>
         <td>${g}</td><td>${w}</td><td>${wr}</td>
+        <td style="color:var(--muted); font-size:0.85rem">${timeAgo(d.lastGameAt) || "—"}</td>
       </tr>`;
     });
-    table += "</table>";
+    table += "</table></div>";
   }
 
   const cta =
@@ -810,12 +830,13 @@ async function renderLeaderboard(mode) {
 
   $app.innerHTML = `
     <div class="tabs">
-      <a href="#/leaderboard/1v1" class="${mode === "1v1" ? "active" : ""}">1v1</a>
-      <a href="#/leaderboard/4p" class="${mode === "4p" ? "active" : ""}">4-Player</a>
+      <a href="#/leaderboard/1v1${showAll ? "/all" : ""}" class="${mode === "1v1" ? "active" : ""}">1v1</a>
+      <a href="#/leaderboard/4p${showAll ? "/all" : ""}" class="${mode === "4p" ? "active" : ""}">4-Player</a>
     </div>
     ${activeHtml}
     <div class="card">
       <h2>${mode.toUpperCase()} Leaderboard</h2>
+      ${filterBar}
       ${table}
       ${cta}
     </div>
