@@ -1044,9 +1044,12 @@ class OpenHexEngine:
                     dfs(nb, visited, length + 1)
                 visited.remove(edge)
 
+        # A path may start (or end) at a vertex an opponent has built on;
+        # the building only stops it from continuing through. Starting the
+        # search at blocked vertices too counts a road that runs between
+        # two opponent buildings.
         for start in adj:
-            if start not in blocked:
-                dfs(start, set(), 0)
+            dfs(start, set(), 0)
 
         return max_length
 
