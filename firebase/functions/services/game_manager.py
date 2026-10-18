@@ -303,8 +303,12 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
         for public_field in ("stateJson", "seed"):
             if public_field in game:
                 update[public_field] = firestore.DELETE_FIELD
+        # A move the seat owed clears its strikes; an answer to another
+        # seat's offer does not, or a bot that misses its own turns but
+        # answers offers would never strike out.
         strikes = game.get("timeoutStrikes") or {}
-        if not auto and strikes.get(bot_id):
+        owed = bot_color in {c.value for c in state.players_to_act()}
+        if not auto and owed and strikes.get(bot_id):
             update["timeoutStrikes"] = {**strikes, bot_id: 0}
         transaction.update(game_ref, update)
         transaction.set(private_ref, {
