@@ -418,6 +418,17 @@ function deriveStateAtPosition(replay, pos) {
           if (ev.requesting) _add(players[p].hand, ev.requesting);
         }
         break;
+      case "tradeExecuted":
+        // player (the offer's creator) gave offering and received requesting; partner the reverse
+        if (players[p]) {
+          _deduct(players[p].hand, ev.offering);
+          _add(players[p].hand, ev.requesting);
+        }
+        if (players[ev.partner]) {
+          _deduct(players[ev.partner].hand, ev.requesting);
+          _add(players[ev.partner].hand, ev.offering);
+        }
+        break;
       case "longestRoadAwarded":
         if (longestRoadPlayer && players[longestRoadPlayer]) {
           players[longestRoadPlayer].longestRoad = false;
@@ -634,12 +645,30 @@ function _describeEvent(ev, pName) {
       const req = ev.requesting ? Object.entries(ev.requesting).map(([r, n]) => `${n} ${r}`).join(", ") : "";
       return `${pName} traded ${off} for ${req}`;
     }
+    case "tradeProposed": {
+      const terms = `${_resText(ev.offering)} for ${_resText(ev.requesting)}`;
+      return ev.counterTo != null
+        ? `${pName} countered offer #${esc(ev.counterTo)} with ${terms} (#${esc(ev.tradeId)})`
+        : `${pName} offered ${terms} (#${esc(ev.tradeId)})`;
+    }
+    case "tradeAccepted": return `${pName} accepted offer #${esc(ev.tradeId)}`;
+    case "tradeRejected": return `${pName} rejected offer #${esc(ev.tradeId)}`;
+    case "tradeAnswerWithdrawn": return `${pName} withdrew its answer to offer #${esc(ev.tradeId)}`;
+    case "tradeExecuted": {
+      const partner = `<span style="color:${PLAYER_COLORS[ev.partner] || '#888'}; text-transform:capitalize">${esc(ev.partner || "?")}</span>`;
+      return `${pName} traded ${_resText(ev.offering)} to ${partner} for ${_resText(ev.requesting)}`;
+    }
+    case "tradeCancelled": return `${pName}'s offer #${esc(ev.tradeId)} closed (${esc(ev.reason || "cancelled")})`;
     case "longestRoadAwarded": return `${pName} earned Longest Road (${ev.length || "?"})`;
     case "largestArmyAwarded": return `${pName} earned Largest Army (${ev.knights || "?"})`;
     case "victoryPointRevealed": return `${pName} revealed a VP card`;
     case "gameWon": return `${pName} won the game! 🎉`;
     default: return `<span style="color:var(--accent)">${esc(ev.type)}</span> ${pName || ""}`;
   }
+}
+
+function _resText(rm) {
+  return rm ? Object.entries(rm).map(([r, n]) => `${esc(n)} ${esc(r)}`).join(", ") : "";
 }
 
 function replayStep(delta) {
