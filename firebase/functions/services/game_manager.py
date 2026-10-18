@@ -560,23 +560,20 @@ def check_timeouts() -> int:
         game_id = game_snap.id
 
         state = from_json(json.loads(load_state_json(game_id, game, db)), GameState)
-        current_color = state.current_player
-        if current_color is None:
+        # The seats the game is waiting on are at fault: the current player,
+        # or during a discard the players still to discard. (The roller of a
+        # 7 must not lose the game because the other seat sat on its discard.)
+        overdue_colors = {c.value for c in state.players_to_act()}
+        if not overdue_colors:
             continue
 
-        # Find winner (opponent with highest VP, or sole opponent in 1v1)
-        other_players = [p for p in game["players"] if p["color"] != current_color.value]
-        if len(other_players) == 1:
-            winner_bot_id = other_players[0]["botId"]
-            winner_name = other_players[0]["name"]
-        else:
-            best = None
-            for p in other_players:
-                vp = state.compute_vp(PlayerColor(p["color"]))
-                if best is None or vp > best[2]:
-                    best = (p["botId"], p["name"], vp)
-            winner_bot_id = best[0]
-            winner_name = best[1]
+        # Find winner: the highest VP among the seats not at fault
+        other_players = [p for p in game["players"] if p["color"] not in overdue_colors]
+        if not other_players:
+            other_players = list(game["players"])
+        best = max(other_players, key=lambda p: state.compute_vp(PlayerColor(p["color"])))
+        winner_bot_id = best["botId"]
+        winner_name = best["name"]
 
         db.collection("games").document(game_id).update({
             "status": "aborted",

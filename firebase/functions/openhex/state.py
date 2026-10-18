@@ -98,6 +98,14 @@ class GameState:
                 return p
         raise ValueError(f"No player with color {color}")
 
+    def players_to_act(self) -> list[PlayerColor]:
+        """Players the game is waiting on: the players still to discard
+        during a discard, otherwise the current player."""
+        pa = self.pending_action
+        if pa is not None and pa.type == "discardResources" and pa.players:
+            return list(pa.players.keys())
+        return [self.current_player] if self.current_player is not None else []
+
     def compute_vp(self, color: PlayerColor) -> int:
         """Compute total VP for a player."""
         vp = 0
