@@ -276,16 +276,23 @@ class OpenHexEngine:
                 return "Cannot play a card bought this turn"
         return None
 
-    def _validate_play_knight(self, s: GameState, a: Action) -> str | None:
-        # Knight can be played before dice roll (only pending=rollDice or no pending)
+    def _require_card_window(self, s: GameState, a: Action) -> str | None:
+        """When a development card may be played: by the current player,
+        before the roll or during the main phase, never while another move
+        is owed (the rulebook: one card, at any time during your turn)."""
         err = self._require_current_player(s, a)
         if err:
             return err
-        if s.pending_action and s.pending_action.type not in ("rollDice",):
-            if s.pending_action is not None and s.dice is None:
-                pass  # allow pre-roll
-            elif s.pending_action is not None:
-                return f"Must resolve pending action: {s.pending_action.type}"
+        if s.is_setup_phase:
+            return "Cannot play dev cards during setup"
+        if s.pending_action is not None and s.pending_action.type != "rollDice":
+            return f"Must resolve pending action: {s.pending_action.type}"
+        return None
+
+    def _validate_play_knight(self, s: GameState, a: Action) -> str | None:
+        err = self._require_card_window(s, a)
+        if err:
+            return err
         err = self._validate_play_dev_card_common(s, a, DevCard.KNIGHT)
         if err:
             return err
@@ -294,7 +301,7 @@ class OpenHexEngine:
         return self._validate_robber_placement(s, a)
 
     def _validate_play_road_building(self, s: GameState, a: Action) -> str | None:
-        err = self._require_main_phase(s, a)
+        err = self._require_card_window(s, a)
         if err:
             return err
         err = self._validate_play_dev_card_common(s, a, DevCard.ROAD_BUILDING)
@@ -323,7 +330,7 @@ class OpenHexEngine:
         return out
 
     def _validate_play_year_of_plenty(self, s: GameState, a: Action) -> str | None:
-        err = self._require_main_phase(s, a)
+        err = self._require_card_window(s, a)
         if err:
             return err
         err = self._validate_play_dev_card_common(s, a, DevCard.YEAR_OF_PLENTY)
@@ -344,7 +351,7 @@ class OpenHexEngine:
         return None
 
     def _validate_play_monopoly(self, s: GameState, a: Action) -> str | None:
-        err = self._require_main_phase(s, a)
+        err = self._require_card_window(s, a)
         if err:
             return err
         err = self._validate_play_dev_card_common(s, a, DevCard.MONOPOLY)
@@ -983,7 +990,8 @@ class OpenHexEngine:
         if (s.pending_action.remaining <= 0
                 or s.board.player_road_count(a.player) >= s.config.max_roads
                 or not self._free_road_edges(s, a.player)):
-            s.pending_action = None
+            # Played before the roll, the card hands back to the roll
+            s.pending_action = PendingAction(type="rollDice") if s.dice is None else None
 
     # -- end turn ------------------------------------------------------------
 
@@ -1006,6 +1014,74 @@ class OpenHexEngine:
         s.current_player = s.turn_order[(idx + 1) % len(s.turn_order)]
         s.turn_number += 1
         s.pending_action = PendingAction(type="rollDice")
+
+    # -----------------------------------------------------------------------
+    # The move made for a seat that misses its deadline
+    # -----------------------------------------------------------------------
+
+    def default_action(self, s: GameState, player: PlayerColor) -> Action | None:
+        """The move the server makes for `player` when it misses its
+        deadline, as colonist.io does: the move the game waits on, resolved
+        the least consequential legal way (a roll; the most-held cards
+        discarded; the robber where it robs nobody if it can; the first
+        steal target; the first free road; the first legal setup placement),
+        otherwise the turn ended. `None` when no legal move exists."""
+        pa = s.pending_action
+        kind = pa.type if pa is not None else None
+
+        def legal(action: Action) -> bool:
+            return self._validate(s, action) is None
+
+        if kind == "placeInitialSettlement":
+            for tile in s.board.tiles:
+                for v in tile.location.vertices():
+                    action = Action(type=kind, player=player, vertex=v)
+                    if legal(action):
+                        return action
+            return None
+        if kind == "placeInitialRoad":
+            last = s.last_setup_settlement
+            for v in (last.adjacent_vertices() if last is not None else []):
+                action = Action(type=kind, player=player, vertices=(last, v))
+                if legal(action):
+                    return action
+            return None
+        if kind == "rollDice" or (kind is None and s.dice is None):
+            action = Action(type="rollDice", player=player)
+            return action if legal(action) else None
+        if kind == "discardResources":
+            owed = (pa.players or {}).get(player, 0)
+            hand = dict(s.get_player(player).hand)
+            picked: ResourceMap = {}
+            for _ in range(owed):
+                if not hand:
+                    break
+                r = max(hand, key=lambda x: hand[x])
+                picked[r] = picked.get(r, 0) + 1
+                hand[r] -= 1
+                if hand[r] == 0:
+                    del hand[r]
+            action = Action(type=kind, player=player, resources=picked)
+            return action if legal(action) else None
+        if kind == "moveRobber":
+            moves = [Action(type=kind, player=player, location=t.location) for t in s.board.tiles]
+            moves = [m for m in moves if legal(m)]
+            for m in moves:
+                if not self._get_steal_targets(s, player, m.location):
+                    return m
+            return moves[0] if moves else None
+        if kind == "stealFromPlayer":
+            targets = pa.targets or []
+            action = Action(type=kind, player=player, target=targets[0]) if targets else None
+            return action if action is not None and legal(action) else None
+        if kind == "placeFreeRoad":
+            edges = self._free_road_edges(s, player)
+            action = Action(type=kind, player=player, vertices=edges[0].vertices) if edges else None
+            return action if action is not None and legal(action) else None
+        if kind is None:
+            action = Action(type="endTurn", player=player)
+            return action if legal(action) else None
+        return None
 
     # -----------------------------------------------------------------------
     # Awards
