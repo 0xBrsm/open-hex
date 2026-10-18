@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from .actions import Action
 from .board import Road, VertexBuilding
 from .events import Event
+from .dice import BalancedDice
 from .state import DiceResult, GameState, PendingAction, Trade
 from .types import (
     BUILDING_COSTS,
@@ -641,7 +642,11 @@ class OpenHexEngine:
             self._distribute_resources(s, total, events)
 
     def _roll(self, s: GameState) -> tuple[int, int]:
-        if s.config.dice_mode == DiceMode.BALANCED and s.balanced_dice is not None:
+        if s.config.dice_mode == DiceMode.BALANCED:
+            if s.balanced_dice is None:
+                # A state loaded from JSON may lack the deck (older servers
+                # dropped it); draw() shuffles a full deck on first use.
+                s.balanced_dice = BalancedDice()
             player = s.current_player.value if s.current_player else None
             return s.balanced_dice.draw(self.rng, current_player=player,
                                         num_players=s.config.num_players)
