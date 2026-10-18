@@ -671,12 +671,24 @@ class OpenHexEngine:
                 amount = 2 if any(c.vertex == v for c in s.board.cities) else 1
                 production[building.player][res] = production[building.player].get(res, 0) + amount
 
-        # Check bank has enough (if not, nobody gets that resource)
+        # Short bank: a resource the bank cannot pay in full goes to nobody
+        # when more than one player claims it; a sole claimant takes what
+        # is left. Each resource is judged over every claim on it, so the
+        # bank never goes negative.
+        claimants: dict[Resource, list[PlayerColor]] = defaultdict(list)
         for player_color, res_map in production.items():
-            for r, n in list(res_map.items()):
-                if s.bank.get(r, 0) < n:
-                    # Not enough in bank for this resource — skip it
-                    del res_map[r]
+            for r in res_map:
+                claimants[r].append(player_color)
+        for r, colors in claimants.items():
+            claimed = sum(production[c][r] for c in colors)
+            available = s.bank.get(r, 0)
+            if claimed <= available:
+                continue
+            if len(colors) == 1 and available > 0:
+                production[colors[0]][r] = available
+            else:
+                for c in colors:
+                    del production[c][r]
 
         # Distribute
         if production:
