@@ -13,7 +13,6 @@ from flask import Flask, request, jsonify
 
 from google.cloud import storage as gcs
 
-from openhex import GameState, from_json
 from openhex.types import PlayerColor
 from openhex.json_codec import (
     _config_from_json, _board_from_json, _event_from_json, game_log_to_json,
@@ -22,7 +21,9 @@ from openhex.json_codec import (
     _hex_dict_to_index, _edge_dicts_to_index,
 )
 
-from services.game_manager import process_action, check_timeouts, create_game, _now_iso
+from services.game_manager import (
+    process_action, check_timeouts, create_game, _now_iso, load_state_json, event_docs,
+)
 from services.hidden_info import filter_state_for_player, filter_event_for_player
 from services.matchmaker import run_matchmaking
 from config import INITIAL_ELO, GCS_REPLAY_BUCKET
@@ -272,7 +273,6 @@ def queue_status(bot):
 # ---------------------------------------------------------------------------
 
 def _build_game_info(game_id: str, game: dict) -> dict:
-    state = from_json(json.loads(game["stateJson"]), GameState)
     winner = None
     if game.get("winnerBotId"):
         for p in game["players"]:
@@ -284,8 +284,8 @@ def _build_game_info(game_id: str, game: dict) -> dict:
         "mode": game["mode"],
         "status": game["status"],
         "players": game["players"],
-        "current_player_color": state.current_player.value if state.current_player else None,
-        "turn_number": state.turn_number,
+        "current_player_color": game.get("currentPlayerColor"),
+        "turn_number": game.get("turnNumber", 0),
         "action_deadline": game.get("actionDeadline"),
         "winner": winner,
     }
@@ -344,7 +344,7 @@ def get_game_state(bot, game_id):
     if bot_color is None:
         return jsonify({"detail": "You are not in this game"}), 403
 
-    state_json = json.loads(game["stateJson"])
+    state_json = json.loads(load_state_json(game_id, game, db))
     filtered = filter_state_for_player(state_json, bot_color)
 
     # Strip static board data after setup phase
@@ -427,13 +427,9 @@ def get_game_events(bot, game_id):
         return jsonify({"detail": "You are not in this game"}), 403
 
     # Query events with seq > after
-    events_ref = db.collection("games").document(game_id).collection("events")
-    query = events_ref.where("seq", ">", after).order_by("seq").stream()
-
     coord_fmt = bot.get("coordinateFormat", "coordinates")
     entries = []
-    for edoc in query:
-        edata = edoc.to_dict()
+    for edata in event_docs(game_id, game, after=after, db=db):
         event = json.loads(edata["eventJson"])
         filtered = filter_event_for_player(event, bot_color)
         if coord_fmt == "indices":
@@ -503,18 +499,8 @@ def get_game_replay(game_id):
     config = _config_from_json(json.loads(game["configJson"]))
     board = _board_from_json(json.loads(game["boardJson"]))
 
-    events_docs = list(
-        db.collection("games").document(game_id).collection("events")
-        .order_by("seq")
-        .stream()
-    )
-    events = []
-    actions = []
-    for edoc in events_docs:
-        edata = edoc.to_dict()
-        events.append(_event_from_json(json.loads(edata["eventJson"])))
-        if edata.get("actionJson"):
-            actions.append(json.loads(edata["actionJson"]))
+    events = [_event_from_json(json.loads(edata["eventJson"]))
+              for edata in event_docs(game_id, game, db=db)]
 
     turn_order = [PlayerColor(c) for c in json.loads(game["turnOrderJson"])]
     game_log = game_log_to_json(config, board, turn_order, events)

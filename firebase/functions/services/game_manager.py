@@ -20,11 +20,48 @@ from openhex.json_codec import _action_from_json, _event_to_json, _config_from_j
 
 import config as cfg
 from services.elo import compute_1v1_updates, compute_4p_updates
-from services.hidden_info import filter_event_for_player
+from services.hidden_info import filter_event_for_player, public_event
 
 
 def _get_db():
     return firestore.client()
+
+
+# ---------------------------------------------------------------------------
+# Private documents
+# ---------------------------------------------------------------------------
+# The Firestore rules let anyone read `games/{id}` and its `events`, which the
+# website relies on. Everything a seat must not see therefore lives where the
+# rules deny reads: `games/{id}/private/state` holds the seed and the full
+# state (every hand, the dev deck, the dice deck), `games/{id}/privateEvents`
+# the events with the card bought and the resource stolen. The public
+# `events` carry the spectator view. A game created before this split
+# (no `privateEvents` flag) keeps its full events in `events`; its state and
+# seed move to the private document on its next action.
+
+def _private_state_ref(game_ref):
+    return game_ref.collection("private").document("state")
+
+
+def load_state_json(game_id: str, game: dict, db=None) -> str:
+    """The game's full state as JSON text, from the private document."""
+    db = db or _get_db()
+    snap = _private_state_ref(db.collection("games").document(game_id)).get()
+    if snap.exists and snap.to_dict().get("stateJson"):
+        return snap.to_dict()["stateJson"]
+    return game["stateJson"]
+
+
+def event_docs(game_id: str, game: dict, after: int = -1, db=None) -> list[dict]:
+    """Event documents carrying the full event JSON, in sequence order."""
+    db = db or _get_db()
+    name = "privateEvents" if game.get("privateEvents") else "events"
+    query = (
+        db.collection("games").document(game_id).collection(name)
+        .where(filter=FieldFilter("seq", ">", after))
+        .order_by("seq")
+    )
+    return [doc.to_dict() for doc in query.stream()]
 
 
 def _now_iso() -> str:
@@ -89,7 +126,6 @@ def create_game(mode: str, bot_ids: list[str], seed: int | None = None) -> str:
     game_doc = {
         "mode": mode,
         "status": "active",
-        "seed": seed,
         "actionCount": 0,
         "actionDeadline": _deadline_iso(),
         "winnerBotId": None,
@@ -100,13 +136,20 @@ def create_game(mode: str, bot_ids: list[str], seed: int | None = None) -> str:
         "players": players,
         "configJson": json.dumps(to_json(game_config)),
         "boardJson": json.dumps(to_json(board)),
-        "stateJson": json.dumps(to_json(state)),
         "turnOrderJson": json.dumps([c.value for c in turn_order]),
         "currentPlayerColor": state.current_player.value if state.current_player else None,
         "turnNumber": state.turn_number,
+        "privateEvents": True,
     }
 
-    db.collection("games").document(game_id).set(game_doc)
+    game_ref = db.collection("games").document(game_id)
+    batch = db.batch()
+    batch.set(game_ref, game_doc)
+    batch.set(_private_state_ref(game_ref), {
+        "seed": seed,
+        "stateJson": json.dumps(to_json(state)),
+    })
+    batch.commit()
     return game_id
 
 
@@ -154,6 +197,9 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
             return {"success": False, "events": [], "error": "Game not found"}
 
         game = game_snap.to_dict()
+        private_ref = _private_state_ref(game_ref)
+        private_snap = private_ref.get(transaction=transaction)
+        private = private_snap.to_dict() if private_snap.exists else {}
         if game["status"] != "active":
             return {"success": False, "events": [], "error": "Game is not active"}
 
@@ -171,7 +217,7 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
         action_dict_copy["player"] = bot_color
 
         # Deserialize state
-        state = from_json(json.loads(game["stateJson"]), GameState)
+        state = from_json(json.loads(private.get("stateJson") or game["stateJson"]), GameState)
 
         # Deserialize action
         try:
@@ -182,7 +228,8 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
 
         # Execute with deterministic RNG
         action_count = game["actionCount"]
-        engine = OpenHexEngine(rng=random.Random(game["seed"] + action_count))
+        seed = private.get("seed", game.get("seed"))
+        engine = OpenHexEngine(rng=random.Random(seed + action_count))
         result = engine.execute_action(state, action)
 
         if not result.success:
@@ -235,9 +282,8 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
                 bot_stats["maxMs"] = duration_ms
             dur_stats[bot_id] = bot_stats
 
-        # Update game document
+        # Update game document; the state and seed go to the private document
         update = {
-            "stateJson": json.dumps(to_json(new_state)),
             "actionCount": new_action_count,
             "actionDeadline": deadline,
             "status": status,
@@ -249,13 +295,21 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
             "nextEventSeq": next_seq + len(result.events),
             "durationStats": dur_stats,
         }
+        for public_field in ("stateJson", "seed"):
+            if public_field in game:
+                update[public_field] = firestore.DELETE_FIELD
         transaction.update(game_ref, update)
+        transaction.set(private_ref, {
+            "seed": seed,
+            "stateJson": json.dumps(to_json(new_state)),
+        })
 
         return {
             "success": True,
             "events": event_entries,
             "error": None,
             "_event_data": event_data_list,
+            "_split_events": bool(game.get("privateEvents")),
             "_log": ("ok", action_dict_copy),
             "_completed": status == "completed",
             "_game_id": game_id,
@@ -268,6 +322,7 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
 
     # Write events and action log outside the transaction (non-critical)
     event_data = result.pop("_event_data", [])
+    split_events = result.pop("_split_events", False)
     log_info = result.pop("_log", None)
     completed = result.pop("_completed", False)
     g_id = result.pop("_game_id", game_id)
@@ -276,7 +331,10 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
 
     for ed in event_data:
         seq_str = f"{ed['seq']:08d}"
-        db.collection("games").document(game_id).collection("events").document(seq_str).set(ed)
+        if split_events:
+            game_ref.collection("privateEvents").document(seq_str).set(ed)
+            ed = dict(ed, eventJson=json.dumps(public_event(json.loads(ed["eventJson"]))))
+        game_ref.collection("events").document(seq_str).set(ed)
 
     if log_info:
         success = log_info[0] == "ok"
@@ -339,7 +397,7 @@ def _update_ratings(game_id: str) -> None:
             })
     else:
         # 4p
-        state = from_json(json.loads(game["stateJson"]), GameState)
+        state = from_json(json.loads(load_state_json(game_id, game, db)), GameState)
         seat_vp = []
         for p in players:
             color = PlayerColor(p["color"])
@@ -457,18 +515,8 @@ def _save_replay_to_gcs(game_id: str) -> None:
         config = _config_from_json(json.loads(game["configJson"]))
         board = _board_from_json(json.loads(game["boardJson"]))
 
-        events_docs = list(
-            db.collection("games").document(game_id).collection("events")
-            .order_by("seq")
-            .stream()
-        )
-        events = []
-        actions = []
-        for edoc in events_docs:
-            edata = edoc.to_dict()
-            events.append(_event_from_json(json.loads(edata["eventJson"])))
-            if edata.get("actionJson"):
-                actions.append(json.loads(edata["actionJson"]))
+        events = [_event_from_json(json.loads(edata["eventJson"]))
+                  for edata in event_docs(game_id, game, db=db)]
 
         turn_order = [PlayerColor(c) for c in json.loads(game["turnOrderJson"])]
         game_log = game_log_to_json(config, board, turn_order, events)
@@ -511,7 +559,7 @@ def check_timeouts() -> int:
         game = game_snap.to_dict()
         game_id = game_snap.id
 
-        state = from_json(json.loads(game["stateJson"]), GameState)
+        state = from_json(json.loads(load_state_json(game_id, game, db)), GameState)
         current_color = state.current_player
         if current_color is None:
             continue
