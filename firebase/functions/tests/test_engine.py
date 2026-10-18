@@ -282,6 +282,35 @@ class PlayersToActTest(unittest.TestCase):
         self.assertEqual(round_trip(s).players_to_act(), [BLUE])
 
 
+class DiscardCountsTest(unittest.TestCase):
+    def discarding(self) -> GameState:
+        s = duel_state()
+        s.dice = DiceResult(3, 4)
+        s.get_player(BLUE).hand = {Resource.WOOD: 6, Resource.ORE: 2}
+        s.pending_action = PendingAction(type="discardResources", players={BLUE: 4})
+        return s
+
+    def test_a_negative_count_is_refused(self):
+        s = self.discarding()
+        # 6 wood and -2 ore sum to the 4 owed, but would draw 2 ore from the bank
+        result = OpenHexEngine().execute_action(s, Action(
+            type="discardResources", player=BLUE, resources={Resource.WOOD: 6, Resource.ORE: -2}))
+        self.assertFalse(result.success)
+        self.assertEqual(result.error, "Discard counts must be positive whole numbers")
+        for bad in ({Resource.WOOD: 4.0}, {Resource.WOOD: True, Resource.ORE: 3}):
+            result = OpenHexEngine().execute_action(s, Action(
+                type="discardResources", player=BLUE, resources=bad))
+            self.assertFalse(result.success, bad)
+
+    def test_a_proper_discard_still_works(self):
+        s = self.discarding()
+        result = OpenHexEngine().execute_action(s, Action(
+            type="discardResources", player=BLUE, resources={Resource.WOOD: 3, Resource.ORE: 1}))
+        self.assertTrue(result.success, result.error)
+        self.assertEqual(result.state.get_player(BLUE).hand, {Resource.WOOD: 3, Resource.ORE: 1})
+        self.assertEqual(result.state.pending_action.type, "moveRobber")
+
+
 class PublicEventTest(unittest.TestCase):
     def test_the_spectator_view_drops_the_card_and_the_resource(self):
         bought = {"type": "devCardBought", "player": "red", "card": "victoryPoint"}

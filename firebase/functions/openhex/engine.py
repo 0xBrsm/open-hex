@@ -519,6 +519,12 @@ class OpenHexEngine:
         expected = s.pending_action.players[a.player]
         if not isinstance(a.resources, dict):
             return "Resources must be a map"
+        # A negative count would take cards from the bank instead of giving
+        # them (subtract_resources adds them), and a non-integer corrupts
+        # the hand; the codec only drops zeros.
+        for n in a.resources.values():
+            if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
+                return "Discard counts must be positive whole numbers"
         total = sum(a.resources.values())
         if total != expected:
             return f"Must discard exactly {expected} cards, got {total}"
