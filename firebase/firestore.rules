@@ -14,6 +14,18 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
     }
+    // Hidden information: the seed, the full state (every hand, the dev
+    // deck, the dice deck) and the unfiltered events. Only Cloud Functions
+    // (admin SDK) read these; the public documents above carry what a
+    // spectator may see.
+    match /games/{gameId}/private/{docId} {
+      allow read: if false;
+      allow write: if false;
+    }
+    match /games/{gameId}/privateEvents/{eventId} {
+      allow read: if false;
+      allow write: if false;
+    }
     match /games/{gameId}/actionLog/{logId} {
       allow read: if true;
       allow write: if false;

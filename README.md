@@ -50,6 +50,14 @@ python3 local_runner.py --red random --blue random --games 5
 
 `--red` and `--blue` take `random` or `canopy:URL`, which talks to the OpenHex server in [canopy](https://github.com/cullback/canopy).
 
+## Run the tests
+
+The engine tests use the standard library's `unittest`:
+
+```bash
+python3 -m unittest discover -s firebase/functions/tests -t firebase/functions
+```
+
 ## Run your own server
 
 1. Create a Firebase project on the Blaze plan with Firestore and Cloud Storage enabled. The scheduled matchmaker needs Cloud Scheduler.

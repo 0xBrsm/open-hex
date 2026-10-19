@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from .actions import Action
 from .board import Road, VertexBuilding
 from .events import Event
+from .dice import BalancedDice
 from .state import DiceResult, GameState, PendingAction, Trade
 from .types import (
     BUILDING_COSTS,
@@ -296,7 +297,30 @@ class OpenHexEngine:
         err = self._require_main_phase(s, a)
         if err:
             return err
-        return self._validate_play_dev_card_common(s, a, DevCard.ROAD_BUILDING)
+        err = self._validate_play_dev_card_common(s, a, DevCard.ROAD_BUILDING)
+        if err:
+            return err
+        # A card with no road to place would leave a free road owed that can
+        # never be placed, and the game stuck until the seat times out.
+        if s.board.player_road_count(a.player) >= s.config.max_roads:
+            return "No road pieces left"
+        if not self._free_road_edges(s, a.player):
+            return "No room for a free road"
+        return None
+
+    def _free_road_edges(self, s: GameState, player: PlayerColor) -> list[Edge]:
+        """Edges a free road may take now: on the board, empty, joined to the
+        player's network."""
+        out: list[Edge] = []
+        seen: set[Edge] = set()
+        for tile in s.board.tiles:
+            for edge in tile.location.edges():
+                if edge in seen:
+                    continue
+                seen.add(edge)
+                if s.board.road_at(edge) is None and self._is_road_connected(s, player, edge):
+                    out.append(edge)
+        return out
 
     def _validate_play_year_of_plenty(self, s: GameState, a: Action) -> str | None:
         err = self._require_main_phase(s, a)
@@ -456,16 +480,23 @@ class OpenHexEngine:
             return "Not a valid hex"
         if tile.terrain == Terrain.DESERT and s.board.robber == loc:
             return "Robber already on desert"
-        # Friendly robber check
-        if s.config.robber_mode == RobberMode.FRIENDLY:
-            player_vp = s.compute_public_vp(a.player)
-            for v in loc.vertices():
-                b = s.board.building_at(v)
-                if b and b.player != a.player:
-                    target_vp = s.compute_public_vp(b.player)
-                    if target_vp <= 2:  # Still at starting VP
-                        return "Friendly robber: cannot block player at starting VP"
+        # Friendly robber: hexes with an opponent still at starting VP are
+        # off limits, unless every other hex is too (the spec's fallback).
+        if (s.config.robber_mode == RobberMode.FRIENDLY
+                and self._friendly_robber_shields(s, a.player, loc)
+                and any(not self._friendly_robber_shields(s, a.player, t.location)
+                        for t in s.board.tiles if t.location != s.board.robber)):
+            return "Friendly robber: cannot block player at starting VP"
         return None
+
+    def _friendly_robber_shields(self, s: GameState, mover: PlayerColor,
+                                 loc: HexPoint) -> bool:
+        """Whether an opponent at starting VP (2 visible points) has a building on `loc`."""
+        for v in loc.vertices():
+            b = s.board.building_at(v)
+            if b and b.player != mover and s.compute_public_vp(b.player) <= 2:
+                return True
+        return False
 
     def _validate_steal_from_player(self, s: GameState, a: Action) -> str | None:
         err = self._require_current_player(s, a)
@@ -488,6 +519,12 @@ class OpenHexEngine:
         expected = s.pending_action.players[a.player]
         if not isinstance(a.resources, dict):
             return "Resources must be a map"
+        # A negative count would take cards from the bank instead of giving
+        # them (subtract_resources adds them), and a non-integer corrupts
+        # the hand; the codec only drops zeros.
+        for n in a.resources.values():
+            if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
+                return "Discard counts must be positive whole numbers"
         total = sum(a.resources.values())
         if total != expected:
             return f"Must discard exactly {expected} cards, got {total}"
@@ -641,7 +678,11 @@ class OpenHexEngine:
             self._distribute_resources(s, total, events)
 
     def _roll(self, s: GameState) -> tuple[int, int]:
-        if s.config.dice_mode == DiceMode.BALANCED and s.balanced_dice is not None:
+        if s.config.dice_mode == DiceMode.BALANCED:
+            if s.balanced_dice is None:
+                # A state loaded from JSON may lack the deck (older servers
+                # dropped it); draw() shuffles a full deck on first use.
+                s.balanced_dice = BalancedDice()
             player = s.current_player.value if s.current_player else None
             return s.balanced_dice.draw(self.rng, current_player=player,
                                         num_players=s.config.num_players)
@@ -666,12 +707,24 @@ class OpenHexEngine:
                 amount = 2 if any(c.vertex == v for c in s.board.cities) else 1
                 production[building.player][res] = production[building.player].get(res, 0) + amount
 
-        # Check bank has enough (if not, nobody gets that resource)
+        # Short bank: a resource the bank cannot pay in full goes to nobody
+        # when more than one player claims it; a sole claimant takes what
+        # is left. Each resource is judged over every claim on it, so the
+        # bank never goes negative.
+        claimants: dict[Resource, list[PlayerColor]] = defaultdict(list)
         for player_color, res_map in production.items():
-            for r, n in list(res_map.items()):
-                if s.bank.get(r, 0) < n:
-                    # Not enough in bank for this resource — skip it
-                    del res_map[r]
+            for r in res_map:
+                claimants[r].append(player_color)
+        for r, colors in claimants.items():
+            claimed = sum(production[c][r] for c in colors)
+            available = s.bank.get(r, 0)
+            if claimed <= available:
+                continue
+            if len(colors) == 1 and available > 0:
+                production[colors[0]][r] = available
+            else:
+                for c in colors:
+                    del production[c][r]
 
         # Distribute
         if production:
@@ -924,7 +977,12 @@ class OpenHexEngine:
         events.append(Event(type="freeRoadPlaced", player=a.player,
                             vertices=(edge.v1, edge.v2)))
         s.pending_action.remaining -= 1
-        if s.pending_action.remaining <= 0:
+        # A second road with no piece left or nowhere to go is forfeited
+        # (the rulebook: a player with one road left places one), rather
+        # than owed forever.
+        if (s.pending_action.remaining <= 0
+                or s.board.player_road_count(a.player) >= s.config.max_roads
+                or not self._free_road_edges(s, a.player)):
             s.pending_action = None
 
     # -- end turn ------------------------------------------------------------
@@ -1027,9 +1085,12 @@ class OpenHexEngine:
                     dfs(nb, visited, length + 1)
                 visited.remove(edge)
 
+        # A path may start (or end) at a vertex an opponent has built on;
+        # the building only stops it from continuing through. Starting the
+        # search at blocked vertices too counts a road that runs between
+        # two opponent buildings.
         for start in adj:
-            if start not in blocked:
-                dfs(start, set(), 0)
+            dfs(start, set(), 0)
 
         return max_length
 
