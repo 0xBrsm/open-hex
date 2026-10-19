@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -32,15 +33,31 @@ def _get_db():
 # ---------------------------------------------------------------------------
 # The Firestore rules let anyone read `games/{id}` and its `events`, which the
 # website relies on. Everything a seat must not see therefore lives where the
-# rules deny reads: `games/{id}/private/state` holds the seed and the full
+# rules deny reads: `games/{id}/private/state` holds the seeds and the full
 # state (every hand, the dev deck, the dice deck), `games/{id}/privateEvents`
 # the events with the card bought and the resource stolen. The public
 # `events` carry the spectator view. A game created before this split
 # (no `privateEvents` flag) keeps its full events in `events`; its state and
 # seed move to the private document on its next action.
+#
+# The board seed (`seed`) can be found again by trying seeds until one makes
+# the public board, so it only lays out the board and the seat order. Dice,
+# dev card draws and steals come from `engineSeed`, 128 random bits that never
+# leave the private document. A game created before `engineSeed` gets one on
+# its next action.
 
 def _private_state_ref(game_ref):
     return game_ref.collection("private").document("state")
+
+
+def _new_engine_seed() -> str:
+    return secrets.token_hex(16)
+
+
+def _engine_rng(engine_seed: str, action_count: int) -> random.Random:
+    # A str seed is hashed with SHA-512, so neighbouring action counts give
+    # unrelated streams.
+    return random.Random(f"{engine_seed}:{action_count}")
 
 
 def load_state_json(game_id: str, game: dict, db=None) -> str:
@@ -147,6 +164,7 @@ def create_game(mode: str, bot_ids: list[str], seed: int | None = None) -> str:
     batch.set(game_ref, game_doc)
     batch.set(_private_state_ref(game_ref), {
         "seed": seed,
+        "engineSeed": _new_engine_seed(),
         "stateJson": json.dumps(to_json(state)),
     })
     batch.commit()
@@ -226,10 +244,11 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
             return {"success": False, "events": [], "error": f"Invalid action: {e}",
                     "_log": ("fail", action_dict_copy)}
 
-        # Execute with deterministic RNG
+        # Execute with the secret engine seed, never the board seed
         action_count = game["actionCount"]
         seed = private.get("seed", game.get("seed"))
-        engine = OpenHexEngine(rng=random.Random(seed + action_count))
+        engine_seed = private.get("engineSeed") or _new_engine_seed()
+        engine = OpenHexEngine(rng=_engine_rng(engine_seed, action_count))
         result = engine.execute_action(state, action)
 
         if not result.success:
@@ -301,6 +320,7 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
         transaction.update(game_ref, update)
         transaction.set(private_ref, {
             "seed": seed,
+            "engineSeed": engine_seed,
             "stateJson": json.dumps(to_json(new_state)),
         })
 
