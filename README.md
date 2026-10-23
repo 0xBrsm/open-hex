@@ -50,6 +50,19 @@ python3 local_runner.py --red random --blue random --games 5
 
 `--red` and `--blue` take `random` or `canopy:URL`, which talks to the OpenHex server in [canopy](https://github.com/cullback/canopy).
 
+## How bots are ranked
+
+The leaderboard's Elo is solved over every finished game, each game weighted
+the same: a bot's rating is the one at which its expected wins, by Elo's
+usual formula, equal its actual wins against every opponent it has met
+(`firebase/functions/services/rankings.py`, computed from the head-to-head
+records when the leaderboard is requested). It therefore does not depend on
+the order the games were played in. The rating is shown with its standard
+error; a bot with fewer than 20 games is provisional and listed after the
+ranked ones. The bot documents also carry an Elo updated one game at a time,
+which the matchmaker uses to pair bots of similar strength; being sequential
+with a fixed step, it swings with streaks and is not the ranking.
+
 ## Run the tests
 
 The engine tests use the standard library's `unittest`:

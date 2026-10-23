@@ -98,6 +98,24 @@ function fmtElo(elo) {
   return Math.round(elo || 1500);
 }
 
+// The leaderboard comes from the API: Elo solved over every finished game of
+// the mode, each game weighted the same (firebase/functions/services/
+// rankings.py), ranked bots first, then the provisional ones (too few games)
+async function loadLeaderboard(mode) {
+  const resp = await fetch(`/api/leaderboard/${mode}?limit=100`);
+  if (!resp.ok) return { entries: [], min_games: 0 };
+  return resp.json();
+}
+
+function fmtRating(e) {
+  const se = e.elo_se == null ? "" : ` <span style="color:var(--muted); font-size:0.8rem">&plusmn;${Math.round(e.elo_se)}</span>`;
+  return `${fmtElo(e.elo)}${se}`;
+}
+
+function rankCell(e) {
+  return e.rank != null ? e.rank : '<span class="badge" title="too few games">provisional</span>';
+}
+
 function timeAgo(ts) {
   if (!ts) return "";
   // Firestore Timestamp objects have .toDate(); plain strings/numbers use Date constructor
@@ -667,8 +685,8 @@ async function renderHome() {
   // every completed game just to count them gets slower as the ladder grows
   const [stats, top1v1, top4p, recentGames] = await Promise.all([
     fetch("/api/stats").then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
-    db.collection("bots").where("mode", "==", "1v1").orderBy("elo1v1", "desc").limit(100).get(),
-    db.collection("bots").where("mode", "==", "4p").orderBy("elo4p", "desc").limit(100).get(),
+    loadLeaderboard("1v1"),
+    loadLeaderboard("4p"),
     db.collection("games")
       .where("status", "in", ["completed", "aborted"])
       .orderBy("completedAt", "desc")
@@ -676,19 +694,13 @@ async function renderHome() {
       .get(),
   ]);
 
-  function miniLb(snap, eloKey, gamesKey, winsKey) {
-    if (snap.empty) return '<p class="empty">No bots registered yet</p>';
-    const docs = snap.docs.filter((doc) => playedRecently(doc.data())).slice(0, 5);
-    if (docs.length === 0) return `<p class="empty">No bots have played in the last ${ACTIVE_DAYS} days</p>`;
+  function miniLb(board) {
+    const rows = board.entries.filter((e) => e.rank != null && playedRecently({ lastGameAt: e.last_game_at })).slice(0, 5);
+    if (rows.length === 0) return `<p class="empty">No ranked bots have played in the last ${ACTIVE_DAYS} days</p>`;
     let html = "<table><tr><th>#</th><th>Bot</th><th>ELO</th><th>W/L</th></tr>";
-    let rank = 0;
-    docs.forEach((doc) => {
-      rank++;
-      const d = doc.data();
-      const g = d[gamesKey] || 0;
-      const w = d[winsKey] || 0;
-      html += `<tr><td>${rank}</td><td><a href="#/bots/${doc.id}">${esc(d.name)}</a></td>`;
-      html += `<td>${fmtElo(d[eloKey])}</td><td>${w}/${g - w}</td></tr>`;
+    rows.forEach((e, i) => {
+      html += `<tr><td>${i + 1}</td><td><a href="#/bots/${esc(e.bot_id)}">${esc(e.name)}</a></td>`;
+      html += `<td>${fmtRating(e)}</td><td>${e.wins}/${e.games - e.wins}</td></tr>`;
     });
     return html + "</table>";
   }
@@ -720,12 +732,12 @@ async function renderHome() {
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1.5rem">
       <div class="card">
         <h2>1v1 Leaderboard</h2>
-        ${miniLb(top1v1, "elo1v1", "games1v1", "wins1v1")}
+        ${miniLb(top1v1)}
         <div style="margin-top:0.5rem; text-align:right"><a href="#/leaderboard/1v1">View all &rarr;</a></div>
       </div>
       <div class="card">
         <h2>4p Leaderboard</h2>
-        ${miniLb(top4p, "elo4p", "games4p", "wins4p")}
+        ${miniLb(top4p)}
         <div style="margin-top:0.5rem; text-align:right"><a href="#/leaderboard/4p">View all &rarr;</a></div>
       </div>
     </div>
@@ -748,16 +760,8 @@ async function renderLeaderboard(mode, showAll) {
   }
   $app.innerHTML = '<div class="loading">Loading...</div>';
 
-  const eloKey = mode === "1v1" ? "elo1v1" : "elo4p";
-  const gamesKey = mode === "1v1" ? "games1v1" : "games4p";
-  const winsKey = mode === "1v1" ? "wins1v1" : "wins4p";
-
-  const [docs, activeSnap] = await Promise.all([
-    db.collection("bots")
-      .where("mode", "==", mode)
-      .orderBy(eloKey, "desc")
-      .limit(100)
-      .get(),
+  const [board, activeSnap] = await Promise.all([
+    loadLeaderboard(mode),
     db.collection("games")
       .where("status", "==", "active")
       .where("mode", "==", mode)
@@ -785,13 +789,18 @@ async function renderLeaderboard(mode, showAll) {
   }
 
   const base = `#/leaderboard/${mode}`;
-  const shown = showAll ? docs.docs : docs.docs.filter((doc) => playedRecently(doc.data()));
+  const shown = showAll
+    ? board.entries
+    : board.entries.filter((e) => playedRecently({ lastGameAt: e.last_game_at }));
   const filterBar = showAll
     ? `<div class="lb-filter">All bots. <a href="${base}">Active only</a></div>`
     : `<div class="lb-filter">Bots that played in the last ${ACTIVE_DAYS} days. <a href="${base}/all">See all</a></div>`;
+  const method = mode === "1v1"
+    ? `<p style="color:var(--muted); font-size:0.85rem; margin-bottom:0.75rem">Elo over every finished game, each game weighted the same, with its standard error. Bots with fewer than ${board.min_games} games are provisional and listed last.</p>`
+    : `<p style="color:var(--muted); font-size:0.85rem; margin-bottom:0.75rem">Running Elo until 4-player games have a head-to-head record.</p>`;
 
   let table = "";
-  if (docs.empty) {
+  if (board.entries.length === 0) {
     table =
       '<p class="empty">No bots registered yet. <a href="#/guide">Check the guide</a> to get started!</p>';
   } else if (shown.length === 0) {
@@ -800,18 +809,15 @@ async function renderLeaderboard(mode, showAll) {
     table =
       '<div class="table-scroll"><table><tr><th>#</th><th>Bot</th><th>ELO</th><th>Games</th><th>Wins</th><th>Win Rate</th><th>Last Game</th></tr>';
     let rank = 0;
-    shown.forEach((doc) => {
-      rank++;
-      const d = doc.data();
-      const g = d[gamesKey] || 0;
-      const w = d[winsKey] || 0;
-      const wr = g > 0 ? `${Math.round((w / g) * 100)}%` : "—";
-      table += `<tr>
-        <td>${rank}</td>
-        <td><a href="#/bots/${doc.id}">${esc(d.name)}</a></td>
-        <td><strong>${fmtElo(d[eloKey])}</strong></td>
-        <td>${g}</td><td>${w}</td><td>${wr}</td>
-        <td style="color:var(--muted); font-size:0.85rem">${timeAgo(d.lastGameAt) || "—"}</td>
+    shown.forEach((e) => {
+      const wr = e.games > 0 ? `${Math.round((e.wins / e.games) * 100)}%` : "—";
+      if (e.rank != null) rank++;
+      table += `<tr${e.rank == null ? ' style="color:var(--muted)"' : ""}>
+        <td>${e.rank != null ? rank : rankCell(e)}</td>
+        <td><a href="#/bots/${esc(e.bot_id)}">${esc(e.name)}</a></td>
+        <td><strong>${fmtRating(e)}</strong></td>
+        <td>${e.games}</td><td>${e.wins}</td><td>${wr}</td>
+        <td style="color:var(--muted); font-size:0.85rem">${timeAgo(e.last_game_at) || "—"}</td>
       </tr>`;
     });
     table += "</table></div>";
@@ -830,6 +836,7 @@ async function renderLeaderboard(mode, showAll) {
     ${activeHtml}
     <div class="card">
       <h2>${mode.toUpperCase()} Leaderboard</h2>
+      ${method}
       ${filterBar}
       ${table}
       ${cta}
@@ -858,13 +865,19 @@ async function renderBotDetail(botId) {
   const totalWins = bot[winsKey] || 0;
   const wr = totalGames > 0 ? `${Math.round((totalWins / totalGames) * 100)}%` : "—";
 
-  // Fetch completed games involving this bot
-  const gamesSnap = await db
-    .collection("games")
-    .where("status", "in", ["completed", "aborted"])
-    .orderBy("completedAt", "desc")
-    .limit(200)
-    .get();
+  // The Elo is the leaderboard's (over every game); the head-to-head is the
+  // server's all-time record per opponent, not a window of recent games
+  const [board, h2hA, h2hB, gamesSnap] = await Promise.all([
+    loadLeaderboard(mode),
+    db.collection("head-to-head").where("bot1Id", "==", botId).get(),
+    db.collection("head-to-head").where("bot2Id", "==", botId).get(),
+    db.collection("games")
+      .where("status", "in", ["completed", "aborted"])
+      .orderBy("completedAt", "desc")
+      .limit(200)
+      .get(),
+  ]);
+  const entry = board.entries.find((e) => e.bot_id === botId);
 
   // Filter to games where this bot participated
   const botGames = [];
@@ -875,35 +888,18 @@ async function renderBotDetail(botId) {
   });
 
   // Head-to-head stats
-  const h2h = {}; // opponentId -> { name, wins, losses, games }
-  for (const g of botGames) {
-    if (g.status !== "completed") continue;
-    for (const p of g.players || []) {
-      if (p.botId === botId) continue;
-      if (!h2h[p.botId]) h2h[p.botId] = { name: p.name, wins: 0, losses: 0, games: 0 };
-      h2h[p.botId].games++;
-      if (g.winnerBotId === botId) h2h[p.botId].wins++;
-      else if (g.winnerBotId === p.botId) h2h[p.botId].losses++;
-    }
-  }
-
-  // Sort h2h by games desc
-  const h2hSorted = Object.entries(h2h).sort((a, b) => b[1].games - a[1].games);
-
-  let h2hHtml = "";
-  if (h2hSorted.length > 0) {
-    h2hHtml = "<table><tr><th>Opponent</th><th>Games</th><th>Wins</th><th>Losses</th><th>Win Rate</th></tr>";
-    for (const [oppId, s] of h2hSorted) {
-      const oppWr = s.games > 0 ? `${Math.round((s.wins / s.games) * 100)}%` : "—";
-      h2hHtml += `<tr>
-        <td><a href="#/bots/${esc(oppId)}">${esc(s.name)}</a></td>
-        <td>${s.games}</td><td>${s.wins}</td><td>${s.losses}</td><td>${oppWr}</td>
-      </tr>`;
-    }
-    h2hHtml += "</table>";
-  } else {
-    h2hHtml = '<p class="empty">No completed games yet</p>';
-  }
+  const h2hSorted = [];
+  h2hA.forEach((doc) => {
+    const d = doc.data();
+    const wins = (d.bot1FirstWins || 0) + (d.bot2FirstLosses || 0);
+    h2hSorted.push([d.bot2Id, { name: d.bot2Name, wins, losses: (d.totalGames || 0) - wins, games: d.totalGames || 0 }]);
+  });
+  h2hB.forEach((doc) => {
+    const d = doc.data();
+    const wins = (d.bot2FirstWins || 0) + (d.bot1FirstLosses || 0);
+    h2hSorted.push([d.bot1Id, { name: d.bot1Name, wins, losses: (d.totalGames || 0) - wins, games: d.totalGames || 0 }]);
+  });
+  h2hSorted.sort((a, b) => b[1].games - a[1].games);
 
   // Recent games list
   let recentHtml = "";
@@ -941,7 +937,8 @@ async function renderBotDetail(botId) {
     <h2 style="margin-bottom:0.5rem">${esc(bot.name)}</h2>
     ${descHtml}
     <div class="stat-grid" style="margin-bottom:1.5rem">
-      <div class="stat"><div class="stat-value">${fmtElo(bot[eloKey])}</div><div class="stat-label">ELO</div></div>
+      <div class="stat"><div class="stat-value">${entry ? fmtRating(entry) : fmtElo(bot[eloKey])}</div><div class="stat-label">ELO</div></div>
+      <div class="stat"><div class="stat-value">${entry ? rankCell(entry) : "—"}</div><div class="stat-label">Rank</div></div>
       <div class="stat"><div class="stat-value">${totalGames}</div><div class="stat-label">Games</div></div>
       <div class="stat"><div class="stat-value">${totalWins}</div><div class="stat-label">Wins</div></div>
       <div class="stat"><div class="stat-value">${wr}</div><div class="stat-label">Win Rate</div></div>

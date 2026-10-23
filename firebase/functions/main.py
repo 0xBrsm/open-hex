@@ -26,6 +26,7 @@ from services.game_manager import (
 )
 from services.hidden_info import filter_state_for_player, filter_event_for_player
 from services.matchmaker import run_matchmaking
+from services import rankings
 from config import INITIAL_ELO, GCS_REPLAY_BUCKET
 
 firebase_admin.initialize_app()
@@ -540,6 +541,13 @@ def get_action_log(game_id):
 
 @app.route("/api/leaderboard/<mode>")
 def get_leaderboard(mode):
+    """The leaderboard: Elo solved over every finished game of the mode,
+    each game weighted the same (services/rankings.py), computed here from
+    the `head-to-head` documents. Ranked bots first, by rating; then the
+    provisional ones (fewer than RANK_MIN_GAMES games), unranked.
+
+    4p has no pairwise record yet, so its board is still ordered by the bot
+    documents' running Elo until one is kept (every entry provisional)."""
     if mode not in ("1v1", "4p"):
         return jsonify({"detail": "Invalid mode"}), 404
 
@@ -549,27 +557,42 @@ def get_leaderboard(mode):
     games_key = "games1v1" if mode == "1v1" else "games4p"
     wins_key = "wins1v1" if mode == "1v1" else "wins4p"
 
-    docs = list(
-        db.collection("bots")
-        .where("mode", "==", mode)
-        .order_by(elo_key, direction=firestore.Query.DESCENDING)
-        .limit(limit_val)
-        .stream()
-    )
+    bot_docs = {d.id: d.to_dict() for d in db.collection("bots").where("mode", "==", mode).stream()}
+
+    if mode == "1v1":
+        h2h = [d.to_dict() for d in db.collection("head-to-head").stream()]
+        pairs, bots = rankings.pairs_from_head_to_head(h2h)
+        for bot_id, bot in bot_docs.items():
+            bots.setdefault(bot_id, {"name": bot.get("name", ""), "games": 0, "wins": 0})
+        ordered = rankings.order(rankings.fit(pairs, bots))[:limit_val]
+    else:
+        by_elo = sorted(bot_docs.items(), key=lambda kv: -kv[1].get(elo_key, INITIAL_ELO))[:limit_val]
+        ordered = [(bot_id, {"rating": bot.get(elo_key, INITIAL_ELO), "se": None,
+                             "games": bot.get(games_key, 0), "wins": bot.get(wins_key, 0),
+                             "provisional": True})
+                   for bot_id, bot in by_elo]
 
     entries = []
-    for i, doc in enumerate(docs):
-        d = doc.to_dict()
+    rank = 0
+    for bot_id, r in ordered:
+        bot = bot_docs.get(bot_id, {})
+        if not r["provisional"]:
+            rank += 1
         entries.append({
-            "rank": i + 1,
-            "bot_id": doc.id,
-            "name": d.get("name", "?"),
-            "elo": d.get(elo_key, INITIAL_ELO),
-            "games": d.get(games_key, 0),
-            "wins": d.get(wins_key, 0),
+            "rank": None if r["provisional"] else rank,
+            "bot_id": bot_id,
+            "name": bot.get("name") or r.get("name") or "?",
+            "elo": r["rating"],
+            "elo_se": r["se"],
+            "provisional": r["provisional"],
+            "games": r["games"],
+            "wins": r["wins"],
+            "last_game_at": bot.get("lastGameAt"),
         })
 
-    return jsonify({"mode": mode, "entries": entries})
+    resp = jsonify({"mode": mode, "min_games": rankings.RANK_MIN_GAMES, "entries": entries})
+    resp.headers["Cache-Control"] = "public, max-age=30"
+    return resp
 
 
 # ---------------------------------------------------------------------------
