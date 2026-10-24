@@ -929,7 +929,7 @@ Emitted when Largest Army changes hands.
 
 Each turn follows this sequence:
 
-1. **Pre-roll** (optional): Play a knight card before rolling
+1. **Pre-roll** (optional): Play a development card before rolling (any kind; a Road Building card's roads are placed before the roll)
 2. **Roll dice**: Mandatory. Produces a `diceRolled` event
 3. **Resolve dice**:
    - **Total 2-6 or 8-12**: Distribute resources. Each settlement adjacent to a hex matching the total produces 1 resource; each city produces 2. Hexes with the robber produce nothing.
@@ -946,7 +946,7 @@ Each turn follows this sequence:
 
 - A player may play **at most one** development card per turn
 - A card **cannot** be played on the turn it was purchased
-- **Knight** cards may be played before rolling dice
+- Any development card may be played before rolling the dice, as well as during the main phase
 - **Victory Point** cards are never "played" — they are automatically counted toward VP and revealed when the player wins
 - The one-card-per-turn limit does **not** apply to Victory Point cards (they aren't played)
 
@@ -1277,7 +1277,7 @@ For a randomized board:
 2. Pick a random starting corner (one of 6 outer-ring corners)
 3. Place number tokens on non-desert hexes following the spiral from that corner inward to center
 4. Ensure no two adjacent hexes both have 6 or 8 (red numbers) — if violated, re-shuffle and re-place
-5. Shuffle the 5 resource port types among the 5 2:1 port positions
+5. Shuffle the 9 port types (4 generic 3:1, one 2:1 per resource) across the 9 port positions
 6. Place the robber on the desert hex
 
 ---

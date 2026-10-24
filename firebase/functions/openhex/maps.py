@@ -75,8 +75,10 @@ STANDARD_PORT_POSITIONS: list[tuple[VertexPoint, VertexPoint]] = [
     (VertexPoint(0, -2, 3), VertexPoint(1, -2, 3)),      # Top-left
 ]
 
-# Standard port types: indices 0,3,5,6 are generic 3:1; others are 2:1
-STANDARD_GENERIC_INDICES = {0, 3, 5, 6}
+# Four generic 3:1 ports and one 2:1 port per resource, shuffled across the
+# nine positions (the 5th edition's variable setup, and colonist.io's: in
+# its games each position holds a 3:1 about 4 times in 9).
+NUM_GENERIC_PORTS = 4
 
 
 def generate_standard_board(seed: int | None = None) -> Board:
@@ -138,16 +140,16 @@ def generate_standard_board(seed: int | None = None) -> Board:
             robber = pos
 
     # Create ports
-    resource_ports = [Resource.WOOD, Resource.BRICK, Resource.SHEEP, Resource.WHEAT, Resource.ORE]
-    rng.shuffle(resource_ports)
+    kinds: list[Resource | None] = [None] * NUM_GENERIC_PORTS + [
+        Resource.WOOD, Resource.BRICK, Resource.SHEEP, Resource.WHEAT, Resource.ORE,
+    ]
+    rng.shuffle(kinds)
 
     ports = []
-    res_idx = 0
-    for i, (v1, v2) in enumerate(STANDARD_PORT_POSITIONS):
-        if i in STANDARD_GENERIC_INDICES:
+    for (v1, v2), kind in zip(STANDARD_PORT_POSITIONS, kinds):
+        if kind is None:
             ports.append(Port(vertices=(v1, v2), rate=3))
         else:
-            ports.append(Port(vertices=(v1, v2), rate=2, resource=resource_ports[res_idx]))
-            res_idx += 1
+            ports.append(Port(vertices=(v1, v2), rate=2, resource=kind))
 
     return Board(tiles=tiles, ports=ports, robber=robber)

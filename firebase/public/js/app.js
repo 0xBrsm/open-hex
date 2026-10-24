@@ -1267,7 +1267,11 @@ function renderGuide() {
     <p>Five resource types: <code>wood</code>, <code>brick</code>, <code>sheep</code>,
        <code>wheat</code>, <code>ore</code>. The resource bank starts with 19 of each.</p>
     <h3>Action Timeout</h3>
-    <p>You have <strong>60 seconds</strong> per action. If you miss the deadline the game is aborted.</p>
+    <p>You have <strong>60 seconds</strong> per action. If you miss the deadline the server makes
+       the pending move for you (it rolls, discards your most-held cards, moves the robber where it
+       robs nobody if it can, steals from the first target, places a free road, or ends your turn)
+       and records a strike; three strikes in a row abort the game as your loss. A move of your
+       own clears your strikes. Moves made for you are marked <code>auto</code> in the action log.</p>
 
     <h2 id="events">3. Parsing &amp; Responding to Game Events</h2>
     <h3>Game State</h3>
@@ -1303,10 +1307,10 @@ Authorization: Bearer your-api-key</pre>
       <tr><td><code>buildCity</code></td><td><code>vertex: {x,y,z}</code> or <code>vertex: int</code></td><td>Main</td></tr>
       <tr><td><code>buyDevCard</code></td><td>&mdash;</td><td>Main</td></tr>
       <tr><td><code>playKnight</code></td><td><code>hex: {x,y,z}</code> or <code>hex: int</code></td><td>Main, or before the roll</td></tr>
-      <tr><td><code>playRoadBuilding</code></td><td>&mdash;</td><td>Main</td></tr>
+      <tr><td><code>playRoadBuilding</code></td><td>&mdash;</td><td>Main, or before the roll</td></tr>
       <tr><td><code>placeFreeRoad</code></td><td><code>edge: [{x,y,z},{x,y,z}]</code> or <code>edge: int</code></td><td>After playRoadBuilding, twice</td></tr>
-      <tr><td><code>playYearOfPlenty</code></td><td><code>resources: ["wood","brick"]</code></td><td>Main</td></tr>
-      <tr><td><code>playMonopoly</code></td><td><code>resource: "wheat"</code></td><td>Main</td></tr>
+      <tr><td><code>playYearOfPlenty</code></td><td><code>resources: ["wood","brick"]</code></td><td>Main, or before the roll</td></tr>
+      <tr><td><code>playMonopoly</code></td><td><code>resource: "wheat"</code></td><td>Main, or before the roll</td></tr>
       <tr><td><code>tradeWithBank</code></td><td><code>offering: {res:n}, requesting: {res:n}</code></td><td>Main</td></tr>
       <tr><td><code>moveRobber</code></td><td><code>hex: {x,y,z}</code> or <code>hex: int</code></td><td>After 7 / knight</td></tr>
       <tr><td><code>stealFromPlayer</code></td><td><code>target: "blue"</code></td><td>After robber move</td></tr>
@@ -1322,8 +1326,9 @@ Authorization: Bearer your-api-key</pre>
       <strong>Pending actions:</strong> after a 7, a knight or a Road Building card the state's
       <code>pendingAction</code> names the move the server waits for (<code>discardResources</code>,
       <code>moveRobber</code>, <code>stealFromPlayer</code>, <code>placeFreeRoad</code> with
-      <code>remaining</code>); every other action is refused until it is resolved. A knight is the
-      only card that may be played before the roll.
+      <code>remaining</code>); every other action is refused until it is resolved. One development
+      card may be played per turn, before the roll or at any point of the main phase; a Road
+      Building card played before the roll has its roads placed before the roll.
     </div>
 
     <h3>Submitting Actions</h3>
