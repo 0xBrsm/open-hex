@@ -34,7 +34,12 @@ def filter_state_for_player(state_json: dict, player_color: str) -> dict:
     return filtered
 
 
-def filter_event_for_player(event_json: dict, player_color: str) -> dict:
+def public_event(event_json: dict) -> dict:
+    """The spectator's view of an event: what every seat may see."""
+    return filter_event_for_player(event_json, None)
+
+
+def filter_event_for_player(event_json: dict, player_color: str | None) -> dict:
     """Return a copy of event_json with hidden info removed for non-involved players."""
     filtered = copy.deepcopy(event_json)
 

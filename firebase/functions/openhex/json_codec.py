@@ -519,7 +519,7 @@ def _state_to_json(s: GameState) -> dict:
     }
     if s.last_setup_settlement:
         d["lastSetupSettlement"] = _vertex_to_json(s.last_setup_settlement)
-    if s.balanced_dice and s.balanced_dice.deck:
+    if s.balanced_dice is not None:
         d["balancedDice"] = {
             "deck": [list(card) for card in s.balanced_dice.deck],
             "recentRolls": list(s.balanced_dice.recent_rolls),
@@ -531,6 +531,7 @@ def _state_to_json(s: GameState) -> dict:
 
 
 def _state_from_json(d: dict) -> GameState:
+    config = _config_from_json(d["config"])
     bd = None
     if d.get("balancedDice"):
         bd_data = d["balancedDice"]
@@ -542,8 +543,13 @@ def _state_from_json(d: dict) -> GameState:
             seven_streak_player=bd_data.get("sevenStreakPlayer"),
             seven_streak_count=bd_data.get("sevenStreakCount", 0),
         )
+    elif config.dice_mode == DiceMode.BALANCED:
+        # A balanced game always carries its deck; an empty one is shuffled
+        # on the first draw. Without this, a state that went through JSON
+        # before the first roll came back rolling independent dice.
+        bd = BalancedDice()
     return GameState(
-        config=_config_from_json(d["config"]),
+        config=config,
         board=_board_from_json(d["board"]),
         bank=_resource_map_from_json(d.get("bank", {})),
         dev_card_deck=_devcard_map_from_json(d.get("devCardDeck", {})),

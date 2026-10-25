@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -17,15 +18,68 @@ from openhex import (
     RobberMode, generate_standard_board, to_json, from_json,
 )
 from openhex.engine import is_off_turn_trade
-from openhex.json_codec import _action_from_json, _event_to_json, _config_from_json, _board_from_json, _event_from_json, game_log_to_json, resolve_action_indices
+from openhex.json_codec import _action_from_json, _action_to_json, _event_to_json, _config_from_json, _board_from_json, _event_from_json, game_log_to_json, resolve_action_indices
 
 import config as cfg
 from services.elo import compute_1v1_updates, compute_4p_updates
-from services.hidden_info import filter_event_for_player
+from services.hidden_info import filter_event_for_player, public_event
 
 
 def _get_db():
     return firestore.client()
+
+
+# ---------------------------------------------------------------------------
+# Private documents
+# ---------------------------------------------------------------------------
+# The Firestore rules let anyone read `games/{id}` and its `events`, which the
+# website relies on. Everything a seat must not see therefore lives where the
+# rules deny reads: `games/{id}/private/state` holds the seeds and the full
+# state (every hand, the dev deck, the dice deck), `games/{id}/privateEvents`
+# the events with the card bought and the resource stolen. The public
+# `events` carry the spectator view. A game created before this split
+# (no `privateEvents` flag) keeps its full events in `events`; its state and
+# seed move to the private document on its next action.
+#
+# The board seed (`seed`) can be found again by trying seeds until one makes
+# the public board, so it only lays out the board and the seat order. Dice,
+# dev card draws and steals come from `engineSeed`, 128 random bits that never
+# leave the private document. A game created before `engineSeed` gets one on
+# its next action.
+
+def _private_state_ref(game_ref):
+    return game_ref.collection("private").document("state")
+
+
+def _new_engine_seed() -> str:
+    return secrets.token_hex(16)
+
+
+def _engine_rng(engine_seed: str, action_count: int) -> random.Random:
+    # A str seed is hashed with SHA-512, so neighbouring action counts give
+    # unrelated streams.
+    return random.Random(f"{engine_seed}:{action_count}")
+
+
+def load_state_json(game_id: str, game: dict, db=None) -> str:
+    """The game's full state as JSON text, from the private document."""
+    db = db or _get_db()
+    snap = _private_state_ref(db.collection("games").document(game_id)).get()
+    if snap.exists and snap.to_dict().get("stateJson"):
+        return snap.to_dict()["stateJson"]
+    return game["stateJson"]
+
+
+def event_docs(game_id: str, game: dict, after: int = -1, db=None) -> list[dict]:
+    """Event documents carrying the full event JSON, in sequence order."""
+    db = db or _get_db()
+    name = "privateEvents" if game.get("privateEvents") else "events"
+    query = (
+        db.collection("games").document(game_id).collection(name)
+        .where(filter=FieldFilter("seq", ">", after))
+        .order_by("seq")
+    )
+    return [doc.to_dict() for doc in query.stream()]
 
 
 def _now_iso() -> str:
@@ -90,7 +144,6 @@ def create_game(mode: str, bot_ids: list[str], seed: int | None = None) -> str:
     game_doc = {
         "mode": mode,
         "status": "active",
-        "seed": seed,
         "actionCount": 0,
         "actionDeadline": _deadline_iso(),
         "winnerBotId": None,
@@ -101,13 +154,21 @@ def create_game(mode: str, bot_ids: list[str], seed: int | None = None) -> str:
         "players": players,
         "configJson": json.dumps(to_json(game_config)),
         "boardJson": json.dumps(to_json(board)),
-        "stateJson": json.dumps(to_json(state)),
         "turnOrderJson": json.dumps([c.value for c in turn_order]),
         "currentPlayerColor": state.current_player.value if state.current_player else None,
         "turnNumber": state.turn_number,
+        "privateEvents": True,
     }
 
-    db.collection("games").document(game_id).set(game_doc)
+    game_ref = db.collection("games").document(game_id)
+    batch = db.batch()
+    batch.set(game_ref, game_doc)
+    batch.set(_private_state_ref(game_ref), {
+        "seed": seed,
+        "engineSeed": _new_engine_seed(),
+        "stateJson": json.dumps(to_json(state)),
+    })
+    batch.commit()
     return game_id
 
 
@@ -117,7 +178,7 @@ def create_game(mode: str, bot_ids: list[str], seed: int | None = None) -> str:
 
 def _log_action(db, game_id: str, bot_id: str, bot_name: str,
                 action_dict: dict, success: bool, error: str | None = None,
-                duration_ms: int | None = None):
+                duration_ms: int | None = None, auto: bool = False):
     entry: dict = {
         "botId": bot_id,
         "botName": bot_name,
@@ -128,12 +189,17 @@ def _log_action(db, game_id: str, bot_id: str, bot_name: str,
     }
     if duration_ms is not None:
         entry["durationMs"] = duration_ms
+    if auto:
+        entry["auto"] = True   # made by the server for a seat past its deadline
     db.collection("games").document(game_id).collection("actionLog").add(entry)
 
 
 def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
-                    *, duration_ms: int | None = None) -> dict:
-    """Process a submitted action using a Firestore transaction for concurrency."""
+                    *, duration_ms: int | None = None, auto: bool = False) -> dict:
+    """Process a submitted action using a Firestore transaction for concurrency.
+
+    `auto` marks a move the server makes for a seat past its deadline
+    (`check_timeouts`); a move of the seat's own clears its timeout strikes."""
     action_dict = resolve_action_indices(action_dict)
 
     # Sanitize duration_ms: must be a non-negative integer
@@ -155,6 +221,9 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
             return {"success": False, "events": [], "error": "Game not found"}
 
         game = game_snap.to_dict()
+        private_ref = _private_state_ref(game_ref)
+        private_snap = private_ref.get(transaction=transaction)
+        private = private_snap.to_dict() if private_snap.exists else {}
         if game["status"] != "active":
             return {"success": False, "events": [], "error": "Game is not active"}
 
@@ -172,7 +241,7 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
         action_dict_copy["player"] = bot_color
 
         # Deserialize state
-        state = from_json(json.loads(game["stateJson"]), GameState)
+        state = from_json(json.loads(private.get("stateJson") or game["stateJson"]), GameState)
 
         # Deserialize action
         try:
@@ -181,9 +250,11 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
             return {"success": False, "events": [], "error": f"Invalid action: {e}",
                     "_log": ("fail", action_dict_copy)}
 
-        # Execute with deterministic RNG
+        # Execute with the secret engine seed, never the board seed
         action_count = game["actionCount"]
-        engine = OpenHexEngine(rng=random.Random(game["seed"] + action_count))
+        seed = private.get("seed", game.get("seed"))
+        engine_seed = private.get("engineSeed") or _new_engine_seed()
+        engine = OpenHexEngine(rng=_engine_rng(engine_seed, action_count))
         result = engine.execute_action(state, action)
 
         if not result.success:
@@ -245,9 +316,8 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
                 bot_stats["maxMs"] = duration_ms
             dur_stats[bot_id] = bot_stats
 
-        # Update game document
+        # Update game document; the state and seed go to the private document
         update = {
-            "stateJson": json.dumps(to_json(new_state)),
             "actionCount": new_action_count,
             "actionDeadline": deadline,
             "status": status,
@@ -259,13 +329,29 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
             "nextEventSeq": next_seq + len(result.events),
             "durationStats": dur_stats,
         }
+        for public_field in ("stateJson", "seed"):
+            if public_field in game:
+                update[public_field] = firestore.DELETE_FIELD
+        # A move the seat owed clears its strikes; an answer to another
+        # seat's offer does not, or a bot that misses its own turns but
+        # answers offers would never strike out.
+        strikes = game.get("timeoutStrikes") or {}
+        owed = bot_color in {c.value for c in state.players_to_act()}
+        if not auto and owed and strikes.get(bot_id):
+            update["timeoutStrikes"] = {**strikes, bot_id: 0}
         transaction.update(game_ref, update)
+        transaction.set(private_ref, {
+            "seed": seed,
+            "engineSeed": engine_seed,
+            "stateJson": json.dumps(to_json(new_state)),
+        })
 
         return {
             "success": True,
             "events": event_entries,
             "error": None,
             "_event_data": event_data_list,
+            "_split_events": bool(game.get("privateEvents")),
             "_log": ("ok", action_dict_copy),
             "_completed": status == "completed",
             "_game_id": game_id,
@@ -278,6 +364,7 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
 
     # Write events and action log outside the transaction (non-critical)
     event_data = result.pop("_event_data", [])
+    split_events = result.pop("_split_events", False)
     log_info = result.pop("_log", None)
     completed = result.pop("_completed", False)
     g_id = result.pop("_game_id", game_id)
@@ -286,13 +373,16 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
 
     for ed in event_data:
         seq_str = f"{ed['seq']:08d}"
-        db.collection("games").document(game_id).collection("events").document(seq_str).set(ed)
+        if split_events:
+            game_ref.collection("privateEvents").document(seq_str).set(ed)
+            ed = dict(ed, eventJson=json.dumps(public_event(json.loads(ed["eventJson"]))))
+        game_ref.collection("events").document(seq_str).set(ed)
 
     if log_info:
         success = log_info[0] == "ok"
         error = result.get("error") if not success else None
         _log_action(db, game_id, bot_id, bot_name, log_info[1], success, error,
-                    duration_ms=dur_ms if success else None)
+                    duration_ms=dur_ms if success else None, auto=auto)
 
     if completed and winner_bid:
         _update_ratings(game_id)
@@ -352,7 +442,7 @@ def _update_ratings(game_id: str) -> None:
             })
     else:
         # 4p
-        state = from_json(json.loads(game["stateJson"]), GameState)
+        state = from_json(json.loads(load_state_json(game_id, game, db)), GameState)
         seat_vp = []
         for p in players:
             color = PlayerColor(p["color"])
@@ -471,18 +561,8 @@ def _save_replay_to_gcs(game_id: str) -> None:
         config = _config_from_json(json.loads(game["configJson"]))
         board = _board_from_json(json.loads(game["boardJson"]))
 
-        events_docs = list(
-            db.collection("games").document(game_id).collection("events")
-            .order_by("seq")
-            .stream()
-        )
-        events = []
-        actions = []
-        for edoc in events_docs:
-            edata = edoc.to_dict()
-            events.append(_event_from_json(json.loads(edata["eventJson"])))
-            if edata.get("actionJson"):
-                actions.append(json.loads(edata["actionJson"]))
+        events = [_event_from_json(json.loads(edata["eventJson"]))
+                  for edata in event_docs(game_id, game, db=db)]
 
         turn_order = [PlayerColor(c) for c in json.loads(game["turnOrderJson"])]
         game_log = game_log_to_json(config, board, turn_order, events)
@@ -509,7 +589,12 @@ def _save_replay_to_gcs(game_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def check_timeouts() -> int:
-    """Check for games past their action deadline. Returns count of aborted games."""
+    """Act for the seats past their action deadline, as colonist.io does: the
+    move the game waits on is made for the seat (`OpenHexEngine.default_action`)
+    and a strike recorded; `cfg.TIMEOUT_STRIKES` strikes in a row, or no
+    legal move to make, abort the game with that seat at fault. A move of
+    the seat's own clears its strikes (`process_action`). Returns the count
+    of games aborted."""
     db = _get_db()
     now = _now_iso()
 
@@ -524,32 +609,59 @@ def check_timeouts() -> int:
     for game_snap in overdue:
         game = game_snap.to_dict()
         game_id = game_snap.id
+        game_ref = db.collection("games").document(game_id)
 
-        state = from_json(json.loads(game["stateJson"]), GameState)
-        current_color = state.current_player
-        if current_color is None:
+        state = from_json(json.loads(load_state_json(game_id, game, db)), GameState)
+        # The seats the game is waiting on are at fault: the current player,
+        # or during a discard the players still to discard. (The roller of a
+        # 7 must not lose the game because the other seat sat on its discard.)
+        overdue_colors = [c.value for c in state.players_to_act()]
+        if not overdue_colors:
             continue
 
-        # Find winner (opponent with highest VP, or sole opponent in 1v1)
-        other_players = [p for p in game["players"] if p["color"] != current_color.value]
-        if len(other_players) == 1:
-            winner_bot_id = other_players[0]["botId"]
-            winner_name = other_players[0]["name"]
-        else:
-            best = None
-            for p in other_players:
-                vp = state.compute_vp(PlayerColor(p["color"]))
-                if best is None or vp > best[2]:
-                    best = (p["botId"], p["name"], vp)
-            winner_bot_id = best[0]
-            winner_name = best[1]
+        seats = {p["color"]: p for p in game["players"]}
+        strikes = dict(game.get("timeoutStrikes") or {})
+        struck_out: set[str] = set()
+        for color in overdue_colors:
+            seat = seats[color]
+            strikes[seat["botId"]] = strikes.get(seat["botId"], 0) + 1
+            if strikes[seat["botId"]] >= cfg.TIMEOUT_STRIKES:
+                struck_out.add(color)
+                continue
+            action = OpenHexEngine().default_action(state, PlayerColor(color))
+            if action is None:
+                struck_out.add(color)
+                continue
+            result = process_action(game_id, seat["botId"], seat["name"],
+                                    _action_to_json(action), auto=True)
+            if not result["success"]:
+                struck_out.add(color)
+                continue
+            # The move changed the game (another seat may still owe a discard)
+            game = game_ref.get().to_dict()
+            state = from_json(json.loads(load_state_json(game_id, game, db)), GameState)
 
-        db.collection("games").document(game_id).update({
+        if game["status"] != "active":
+            continue   # the move made for the seat ended the game
+        if not struck_out:
+            game_ref.update({"timeoutStrikes": strikes})
+            continue
+
+        # Find winner: the highest VP among the seats not at fault
+        other_players = [p for p in game["players"] if p["color"] not in struck_out]
+        if not other_players:
+            other_players = list(game["players"])
+        best = max(other_players, key=lambda p: state.compute_vp(PlayerColor(p["color"])))
+        winner_bot_id = best["botId"]
+        winner_name = best["name"]
+
+        game_ref.update({
             "status": "aborted",
             "winnerBotId": winner_bot_id,
             "winnerName": winner_name,
             "completedAt": _now_iso(),
             "actionDeadline": None,
+            "timeoutStrikes": strikes,
         })
 
         _update_ratings(game_id)

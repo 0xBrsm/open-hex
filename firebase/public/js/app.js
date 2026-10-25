@@ -1318,9 +1318,12 @@ function renderGuide() {
        See the <a href="#/events-reference">Events Reference</a> for the trade events.</p>
 
     <h3>Action Timeout</h3>
-    <p>You have <strong>60 seconds</strong> per action. If you miss the deadline the game is aborted.
-       The deadline belongs to the seat the game is waiting on; answering or countering another player's offer
-       does not reset it.</p>
+    <p>You have <strong>60 seconds</strong> per action. If you miss the deadline the server makes
+       the pending move for you (it rolls, discards your most-held cards, moves the robber where it
+       robs nobody if it can, steals from the first target, places a free road, or ends your turn)
+       and records a strike; three strikes in a row abort the game as your loss. A move of your
+       own clears your strikes. Moves made for you are marked <code>auto</code> in the action log.
+       Answering or countering another player's offer does not reset the deadline.</p>
 
     <h2 id="events">3. Parsing &amp; Responding to Game Events</h2>
     <h3>Game State</h3>
@@ -1356,10 +1359,11 @@ Authorization: Bearer your-api-key</pre>
       <tr><td><code>buildSettlement</code></td><td><code>vertex: {x,y,z}</code> or <code>vertex: int</code></td><td>Main</td></tr>
       <tr><td><code>buildCity</code></td><td><code>vertex: {x,y,z}</code> or <code>vertex: int</code></td><td>Main</td></tr>
       <tr><td><code>buyDevCard</code></td><td>&mdash;</td><td>Main</td></tr>
-      <tr><td><code>playKnight</code></td><td><code>hex: {x,y,z}</code> or <code>hex: int</code></td><td>Main</td></tr>
-      <tr><td><code>playRoadBuilding</code></td><td>&mdash;</td><td>Main</td></tr>
-      <tr><td><code>playYearOfPlenty</code></td><td><code>resources: ["wood","brick"]</code></td><td>Main</td></tr>
-      <tr><td><code>playMonopoly</code></td><td><code>resource: "wheat"</code></td><td>Main</td></tr>
+      <tr><td><code>playKnight</code></td><td><code>hex: {x,y,z}</code> or <code>hex: int</code></td><td>Main, or before the roll</td></tr>
+      <tr><td><code>playRoadBuilding</code></td><td>&mdash;</td><td>Main, or before the roll</td></tr>
+      <tr><td><code>placeFreeRoad</code></td><td><code>edge: [{x,y,z},{x,y,z}]</code> or <code>edge: int</code></td><td>After playRoadBuilding, twice</td></tr>
+      <tr><td><code>playYearOfPlenty</code></td><td><code>resources: ["wood","brick"]</code></td><td>Main, or before the roll</td></tr>
+      <tr><td><code>playMonopoly</code></td><td><code>resource: "wheat"</code></td><td>Main, or before the roll</td></tr>
       <tr><td><code>tradeWithBank</code></td><td><code>offering: {res:n}, requesting: {res:n}</code></td><td>Main</td></tr>
       <tr><td><code>proposeTrade</code></td><td><code>offering: {res:n}, requesting: {res:n}</code></td><td>Main, your turn</td></tr>
       <tr><td><code>proposeTrade</code> (counter-offer)</td><td><code>counterTo: tradeId, offering, requesting</code></td><td>Main, another player's turn</td></tr>
@@ -1386,6 +1390,15 @@ Authorization: Bearer your-api-key</pre>
 {"action": {"type": "confirmTrade", "tradeId": 1, "partner": "blue"}}                            // red executes with blue
 {"action": {"type": "confirmTrade", "tradeId": 2}}                                               // or takes white's counter</pre>
 
+    <div class="note">
+      <strong>Pending actions:</strong> after a 7, a knight or a Road Building card the state's
+      <code>pendingAction</code> names the move the server waits for (<code>discardResources</code>,
+      <code>moveRobber</code>, <code>stealFromPlayer</code>, <code>placeFreeRoad</code> with
+      <code>remaining</code>); every other action is refused until it is resolved. One development
+      card may be played per turn, before the roll or at any point of the main phase; a Road
+      Building card played before the roll has its roads placed before the roll.
+    </div>
+
     <h3>Submitting Actions</h3>
     <pre>curl -X POST /api/games/{game_id}/actions \\
   -H "Authorization: Bearer your-api-key" \\
@@ -1398,14 +1411,24 @@ Authorization: Bearer your-api-key</pre>
     <h3>Event Types</h3>
     <table>
       <tr><th>Event Type</th><th>Key Fields</th></tr>
-      <tr><td><code>diceRolled</code></td><td>player, dice (array of 2)</td></tr>
+      <tr><td><code>setupSettlementPlaced</code></td><td>player, vertex</td></tr>
+      <tr><td><code>setupRoadPlaced</code></td><td>player, edge</td></tr>
+      <tr><td><code>setupResourcesGranted</code></td><td>player, resources</td></tr>
+      <tr><td><code>diceRolled</code></td><td>player, die1, die2</td></tr>
+      <tr><td><code>resourcesProduced</code></td><td>diceTotal, production</td></tr>
       <tr><td><code>settlementBuilt</code></td><td>player, vertex</td></tr>
       <tr><td><code>cityBuilt</code></td><td>player, vertex</td></tr>
       <tr><td><code>roadBuilt</code></td><td>player, edge</td></tr>
       <tr><td><code>devCardBought</code></td><td>player, card (hidden for opponents)</td></tr>
       <tr><td><code>knightPlayed</code></td><td>player, hex</td></tr>
+      <tr><td><code>roadBuildingPlayed</code></td><td>player</td></tr>
+      <tr><td><code>freeRoadPlaced</code></td><td>player, edge</td></tr>
+      <tr><td><code>yearOfPlentyPlayed</code></td><td>player, resources (list)</td></tr>
+      <tr><td><code>monopolyPlayed</code></td><td>player, resource, collected</td></tr>
       <tr><td><code>robberMoved</code></td><td>player, hex</td></tr>
       <tr><td><code>resourceStolen</code></td><td>player, target, resource (maybe hidden)</td></tr>
+      <tr><td><code>nothingToSteal</code></td><td>player, target</td></tr>
+      <tr><td><code>resourcesDiscarded</code></td><td>player, resources</td></tr>
       <tr><td><code>bankTradeExecuted</code></td><td>player, offering, requesting</td></tr>
       <tr><td><code>tradeProposed</code></td><td>player, tradeId, offering, requesting, counterTo (counter-offers only)</td></tr>
       <tr><td><code>tradeAccepted</code></td><td>player, tradeId</td></tr>
@@ -1413,7 +1436,9 @@ Authorization: Bearer your-api-key</pre>
       <tr><td><code>tradeAnswerWithdrawn</code></td><td>player, tradeId</td></tr>
       <tr><td><code>tradeExecuted</code></td><td>player (offer's creator, gave offering), partner, tradeId, offering, requesting</td></tr>
       <tr><td><code>tradeCancelled</code></td><td>player (offer's creator), tradeId, reason</td></tr>
-      <tr><td><code>turnEnded</code></td><td>player</td></tr>
+      <tr><td><code>longestRoadAwarded</code></td><td>player (null when nobody qualifies), length</td></tr>
+      <tr><td><code>largestArmyAwarded</code></td><td>player, knights</td></tr>
+      <tr><td><code>turnEnded</code></td><td>player, turnNumber</td></tr>
       <tr><td><code>gameWon</code></td><td>player, victoryPoints</td></tr>
     </table>
 
@@ -2027,34 +2052,34 @@ function renderEventsReference() {
     <p>Each event in the response has a <code>seq</code> (sequence number) and an <code>event</code> object:</p>
     <pre>{
   "events": [
-    {"seq": 0, "event": {"type": "settlementBuilt", "player": "red", "vertex": {"x": 0, "y": 0, "z": 1}}},
-    {"seq": 1, "event": {"type": "roadBuilt", "player": "red", "edge": [{"x": 0, "y": 0, "z": 1}, {"x": 0, "y": 1, "z": 1}]}}
+    {"seq": 0, "event": {"type": "setupSettlementPlaced", "player": "red", "vertex": {"x": 0, "y": 0, "z": 1}}},
+    {"seq": 1, "event": {"type": "setupRoadPlaced", "player": "red", "edge": [{"x": 0, "y": 0, "z": 1}, {"x": 0, "y": 1, "z": 1}]}}
   ]
 }</pre>
     <p>Track the highest <code>seq</code> you've seen and pass it as <code>?after=N</code> to get only new events.</p>
 
     <h2>Setup Phase Events</h2>
 
-    <h3>settlementBuilt</h3>
-    <p>A settlement was placed (setup or main phase).</p>
+    <h3>setupSettlementPlaced</h3>
+    <p>A settlement was placed during setup.</p>
     <pre>{
-  "type": "settlementBuilt",
+  "type": "setupSettlementPlaced",
   "player": "red",
   "vertex": {"x": 1, "y": 0, "z": 0}
 }</pre>
 
-    <h3>roadBuilt</h3>
-    <p>A road was placed. Edges are defined by their two endpoint vertices.</p>
+    <h3>setupRoadPlaced</h3>
+    <p>A road was placed during setup. Edges are defined by their two endpoint vertices.</p>
     <pre>{
-  "type": "roadBuilt",
+  "type": "setupRoadPlaced",
   "player": "red",
   "edge": [{"x": 1, "y": 0, "z": 0}, {"x": 1, "y": 1, "z": 0}]
 }</pre>
 
-    <h3>setupResourcesCollected</h3>
-    <p>Resources granted from second settlement placement (setup phase only).</p>
+    <h3>setupResourcesGranted</h3>
+    <p>Resources granted for the second settlement, sent after its road is placed (setup phase only).</p>
     <pre>{
-  "type": "setupResourcesCollected",
+  "type": "setupResourcesGranted",
   "player": "red",
   "resources": {"wood": 1, "wheat": 1, "ore": 1}
 }</pre>
@@ -2062,13 +2087,12 @@ function renderEventsReference() {
     <h2>Dice &amp; Production Events</h2>
 
     <h3>diceRolled</h3>
-    <p>A player rolled the dice. Includes individual dice and the total.</p>
+    <p>A player rolled the dice. Includes the two dice; the total is on <code>resourcesProduced</code>.</p>
     <pre>{
   "type": "diceRolled",
   "player": "red",
   "die1": 3,
-  "die2": 5,
-  "diceTotal": 8
+  "die2": 5
 }</pre>
 
     <h3>resourcesProduced</h3>
@@ -2084,6 +2108,22 @@ function renderEventsReference() {
 }</pre>
 
     <h2>Building Events</h2>
+
+    <h3>settlementBuilt</h3>
+    <p>A settlement was built in the main phase.</p>
+    <pre>{
+  "type": "settlementBuilt",
+  "player": "red",
+  "vertex": {"x": 1, "y": 0, "z": 0}
+}</pre>
+
+    <h3>roadBuilt</h3>
+    <p>A road was built in the main phase. Edges are defined by their two endpoint vertices.</p>
+    <pre>{
+  "type": "roadBuilt",
+  "player": "red",
+  "edge": [{"x": 1, "y": 0, "z": 0}, {"x": 1, "y": 1, "z": 0}]
+}</pre>
 
     <h3>cityBuilt</h3>
     <p>A settlement was upgraded to a city.</p>
@@ -2113,10 +2153,12 @@ function renderEventsReference() {
        <code>roadBuilding</code>, <code>yearOfPlenty</code></p>
 
     <h3>knightPlayed</h3>
-    <p>A knight card was played (triggers robber move).</p>
+    <p>A knight card was played; it moves the robber to <code>hex</code>. If an opponent can be
+       robbed there, a <code>stealFromPlayer</code> action is then pending.</p>
     <pre>{
   "type": "knightPlayed",
-  "player": "red"
+  "player": "red",
+  "hex": {"x": 0, "y": 1, "z": -1}
 }</pre>
 
     <h3>monopolyPlayed</h3>
@@ -2137,10 +2179,19 @@ function renderEventsReference() {
 }</pre>
 
     <h3>roadBuildingPlayed</h3>
-    <p>A Road Building card was played (player then places 2 free roads via <code>roadBuilt</code> events).</p>
+    <p>A Road Building card was played. The player then owes two <code>placeFreeRoad</code>
+       actions (one if only one road is left); <code>buildRoad</code> is refused until they are placed.</p>
     <pre>{
   "type": "roadBuildingPlayed",
   "player": "red"
+}</pre>
+
+    <h3>freeRoadPlaced</h3>
+    <p>A free road from Road Building was placed.</p>
+    <pre>{
+  "type": "freeRoadPlaced",
+  "player": "red",
+  "edge": [{"x": 1, "y": 0, "z": 0}, {"x": 1, "y": 1, "z": 0}]
 }</pre>
 
     <h2>Robber Events</h2>
@@ -2167,6 +2218,14 @@ function renderEventsReference() {
 // If you are a spectator:
 {
   "type": "resourceStolen",
+  "player": "red",
+  "target": "blue"
+}</pre>
+
+    <h3>nothingToSteal</h3>
+    <p>The chosen target had no resource cards.</p>
+    <pre>{
+  "type": "nothingToSteal",
   "player": "red",
   "target": "blue"
 }</pre>
@@ -2248,18 +2307,19 @@ function renderEventsReference() {
 
     <h2>Special Award Events</h2>
 
-    <h3>longestRoadClaimed</h3>
-    <p>A player claimed or took over Longest Road (2 VP).</p>
+    <h3>longestRoadAwarded</h3>
+    <p>A player claimed or took over Longest Road (2 VP). When a road is broken and nobody
+       qualifies any more, the event comes with <code>"player": null</code> and <code>"length": 0</code>.</p>
     <pre>{
-  "type": "longestRoadClaimed",
+  "type": "longestRoadAwarded",
   "player": "red",
   "length": 5
 }</pre>
 
-    <h3>largestArmyClaimed</h3>
+    <h3>largestArmyAwarded</h3>
     <p>A player claimed or took over Largest Army (2 VP).</p>
     <pre>{
-  "type": "largestArmyClaimed",
+  "type": "largestArmyAwarded",
   "player": "red",
   "knights": 3
 }</pre>
@@ -2285,19 +2345,23 @@ function renderEventsReference() {
     <h2>Event Type Summary</h2>
     <table>
       <tr><th>Event Type</th><th>Key Fields</th><th>Phase</th></tr>
-      <tr><td><code>settlementBuilt</code></td><td>player, vertex</td><td>Setup / Main</td></tr>
-      <tr><td><code>roadBuilt</code></td><td>player, edge</td><td>Setup / Main</td></tr>
-      <tr><td><code>setupResourcesCollected</code></td><td>player, resources</td><td>Setup</td></tr>
-      <tr><td><code>diceRolled</code></td><td>player, die1, die2, diceTotal</td><td>Main</td></tr>
+      <tr><td><code>setupSettlementPlaced</code></td><td>player, vertex</td><td>Setup</td></tr>
+      <tr><td><code>setupRoadPlaced</code></td><td>player, edge</td><td>Setup</td></tr>
+      <tr><td><code>setupResourcesGranted</code></td><td>player, resources</td><td>Setup</td></tr>
+      <tr><td><code>diceRolled</code></td><td>player, die1, die2</td><td>Main</td></tr>
       <tr><td><code>resourcesProduced</code></td><td>diceTotal, production</td><td>Main</td></tr>
+      <tr><td><code>settlementBuilt</code></td><td>player, vertex</td><td>Main</td></tr>
+      <tr><td><code>roadBuilt</code></td><td>player, edge</td><td>Main</td></tr>
       <tr><td><code>cityBuilt</code></td><td>player, vertex</td><td>Main</td></tr>
       <tr><td><code>devCardBought</code></td><td>player, card (hidden for opponents)</td><td>Main</td></tr>
-      <tr><td><code>knightPlayed</code></td><td>player</td><td>Main</td></tr>
+      <tr><td><code>knightPlayed</code></td><td>player, hex</td><td>Main / before the roll</td></tr>
       <tr><td><code>monopolyPlayed</code></td><td>player, resource, collected</td><td>Main</td></tr>
       <tr><td><code>yearOfPlentyPlayed</code></td><td>player, resources (list)</td><td>Main</td></tr>
       <tr><td><code>roadBuildingPlayed</code></td><td>player</td><td>Main</td></tr>
-      <tr><td><code>robberMoved</code></td><td>player, hex</td><td>After 7 / knight</td></tr>
+      <tr><td><code>freeRoadPlaced</code></td><td>player, edge</td><td>After roadBuildingPlayed</td></tr>
+      <tr><td><code>robberMoved</code></td><td>player, hex</td><td>After 7</td></tr>
       <tr><td><code>resourceStolen</code></td><td>player, target, resource (maybe hidden)</td><td>After robber</td></tr>
+      <tr><td><code>nothingToSteal</code></td><td>player, target</td><td>After robber</td></tr>
       <tr><td><code>resourcesDiscarded</code></td><td>player, resources</td><td>After 7</td></tr>
       <tr><td><code>bankTradeExecuted</code></td><td>player, offering, requesting</td><td>Main</td></tr>
       <tr><td><code>tradeProposed</code></td><td>player, tradeId, offering, requesting, counterTo</td><td>Main</td></tr>
@@ -2306,8 +2370,8 @@ function renderEventsReference() {
       <tr><td><code>tradeAnswerWithdrawn</code></td><td>player, tradeId</td><td>Main</td></tr>
       <tr><td><code>tradeExecuted</code></td><td>player, partner, tradeId, offering, requesting</td><td>Main</td></tr>
       <tr><td><code>tradeCancelled</code></td><td>player, tradeId, reason</td><td>Main</td></tr>
-      <tr><td><code>longestRoadClaimed</code></td><td>player, length</td><td>Main</td></tr>
-      <tr><td><code>largestArmyClaimed</code></td><td>player, knights</td><td>Main</td></tr>
+      <tr><td><code>longestRoadAwarded</code></td><td>player (null when nobody qualifies), length</td><td>Main</td></tr>
+      <tr><td><code>largestArmyAwarded</code></td><td>player, knights</td><td>Main</td></tr>
       <tr><td><code>turnEnded</code></td><td>player, turnNumber</td><td>Main</td></tr>
       <tr><td><code>gameWon</code></td><td>player, victoryPoints</td><td>Main</td></tr>
     </table>
