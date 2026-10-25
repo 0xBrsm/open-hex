@@ -17,7 +17,7 @@ from openhex import (
     Action, DiceMode, GameConfig, GameState, OpenHexEngine, PlayerColor,
     RobberMode, generate_standard_board, to_json, from_json,
 )
-from openhex.engine import is_off_turn_trade
+from openhex.engine import is_player_trade
 from openhex.json_codec import _action_from_json, _action_to_json, _event_to_json, _config_from_json, _board_from_json, _event_from_json, game_log_to_json, resolve_action_indices
 
 import config as cfg
@@ -282,14 +282,14 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
             filtered = filter_event_for_player(event_json, bot_color)
             event_entries.append({"seq": seq, "event": filtered})
 
-        # Determine game outcome. The deadline belongs to the current player
-        # (check_timeouts blames them). A trade action by any other seat -- an
-        # answer, a counter-offer, cancelling its own counter -- is optional and
-        # leaves that deadline where it was, so answers can't keep a stalled
-        # turn alive.
+        # Determine game outcome. The trading between two moves counts as one
+        # action (`is_player_trade`): it leaves the deadline where the last
+        # move set it, so neither the current player's offers nor anyone's
+        # answers keep a turn alive.
+        trade = is_player_trade(action)
         if new_state.winner is not None:
             deadline = None
-        elif is_off_turn_trade(state, action):
+        elif trade:
             deadline = game.get("actionDeadline")
         else:
             deadline = _deadline_iso()
@@ -332,12 +332,12 @@ def process_action(game_id: str, bot_id: str, bot_name: str, action_dict: dict,
         for public_field in ("stateJson", "seed"):
             if public_field in game:
                 update[public_field] = firestore.DELETE_FIELD
-        # A move the seat owed clears its strikes; an answer to another
-        # seat's offer does not, or a bot that misses its own turns but
-        # answers offers would never strike out.
+        # A move the seat owed clears its strikes; trading does not, or a bot
+        # that only trades (or misses its own turns but answers offers) would
+        # never strike out.
         strikes = game.get("timeoutStrikes") or {}
         owed = bot_color in {c.value for c in state.players_to_act()}
-        if not auto and owed and strikes.get(bot_id):
+        if not auto and not trade and owed and strikes.get(bot_id):
             update["timeoutStrikes"] = {**strikes, bot_id: 0}
         transaction.update(game_ref, update)
         transaction.set(private_ref, {

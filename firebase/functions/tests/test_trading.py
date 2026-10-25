@@ -16,7 +16,7 @@ from openhex import (
     generate_standard_board, from_json, to_json, game_log_to_json, game_log_from_json,
 )
 from openhex.board import VertexBuilding
-from openhex.engine import PLAYER_TRADE_ACTIONS, is_off_turn_trade
+from openhex.engine import PLAYER_TRADE_ACTIONS, is_player_trade
 from openhex.json_codec import _action_from_json
 from openhex.state import DiceResult
 from openhex.types import Resource
@@ -503,11 +503,15 @@ class PublicInformation(TradeCase):
 
 
 class Deadline(TradeCase):
-    def test_only_the_current_players_moves_owe_the_deadline(self):
-        # The ladder's 60-second deadline stays with the current player: trade
-        # actions by other seats are optional and must not extend it.
+    def test_trading_never_restarts_the_clock(self):
+        # The ladder's 60-second deadline counts the trading between two moves
+        # as one action: no trade action, the current player's included,
+        # restarts it, or a seat could propose and cancel for ever.
         s, tid = self.offer(main_phase())
-        off_turn = [
+        trading = [
+            Action(type="proposeTrade", player=RED, offering={SHEEP: 1}, requesting={ORE: 1}),
+            Action(type="confirmTrade", player=RED, trade_id=tid, partner=BLUE),
+            Action(type="cancelTrade", player=RED, trade_id=tid),
             Action(type="acceptTrade", player=BLUE, trade_id=tid),
             Action(type="rejectTrade", player=WHITE, trade_id=tid),
             Action(type="withdrawTradeAnswer", player=WHITE, trade_id=tid),
@@ -515,15 +519,13 @@ class Deadline(TradeCase):
                    requesting={WOOD: 1}, counter_to=tid),
             Action(type="cancelTrade", player=ORANGE, trade_id=2),
         ]
-        on_turn = [
-            Action(type="proposeTrade", player=RED, offering={SHEEP: 1}, requesting={ORE: 1}),
-            Action(type="confirmTrade", player=RED, trade_id=tid, partner=BLUE),
-            Action(type="cancelTrade", player=RED, trade_id=tid),
+        moves = [
+            Action(type="tradeWithBank", player=RED, offering={WOOD: 4}, requesting={ORE: 1}),
             Action(type="endTurn", player=RED),
             Action(type="discardResources", player=BLUE, resources={WOOD: 1}),
         ]
-        self.assertTrue(all(is_off_turn_trade(s, a) for a in off_turn))
-        self.assertFalse(any(is_off_turn_trade(s, a) for a in on_turn))
+        self.assertTrue(all(is_player_trade(a) for a in trading))
+        self.assertFalse(any(is_player_trade(a) for a in moves))
 
 
 class Contract(unittest.TestCase):

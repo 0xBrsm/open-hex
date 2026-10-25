@@ -592,7 +592,7 @@ Every close other than execution produces a `tradeCancelled` event with a `reaso
 - the creator holds `offering`;
 - the creator has no identical offer standing (same `offering` and `requesting`). A duplicate is refused with an error that names the standing `tradeId`.
 
-There is no limit on the number of offers per turn.
+There is no limit on the number of offers per turn. A server that times moves counts the trading between two moves as one action: no trade action, by any seat, restarts a per-move deadline (the ladder's 60 seconds) or clears a timeout strike, so trading cannot keep a turn alive.
 
 #### proposeTrade
 
@@ -610,7 +610,7 @@ The engine assigns the offer's `tradeId` (unique within the game, sequential fro
 {"type": "proposeTrade", "player": "blue", "counterTo": 1, "offering": {"wheat": 1}, "requesting": {"wood": 3}}
 ```
 
-A counter-offer is a new offer with its own `tradeId`, addressed to the current player alone. Its creator (here blue) gives `offering` and receives `requesting`, exactly as written. The current player takes it with `confirmTrade` or turns it down with `rejectTrade`; no other seat may answer it. It stands independently of the offer it answers. A counter-offer cannot itself be countered, and the current player does not use `counterTo`: the current player answers a counter-offer by proposing a new offer.
+A counter-offer is a new offer with its own `tradeId`, addressed to the current player alone. Its creator (here blue) gives `offering` and receives `requesting`, exactly as written. The current player takes it with `confirmTrade` or turns it down with `rejectTrade`; no other seat may answer it. It stands independently of the offer it answers: when that offer is cancelled, executed or rejected by everyone, the counter-offer stays open, and closes only as any offer does. A counter-offer cannot itself be countered, and the current player does not use `counterTo`: the current player answers a counter-offer by proposing a new offer.
 
 #### acceptTrade
 

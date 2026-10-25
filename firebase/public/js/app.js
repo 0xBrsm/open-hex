@@ -1323,7 +1323,9 @@ function renderGuide() {
        robs nobody if it can, steals from the first target, places a free road, or ends your turn)
        and records a strike; three strikes in a row abort the game as your loss. A move of your
        own clears your strikes. Moves made for you are marked <code>auto</code> in the action log.
-       Answering or countering another player's offer does not reset the deadline.</p>
+       Player trading counts as one action: proposing, answering, countering, confirming or
+       cancelling a trade, by any seat, neither resets the deadline nor clears a strike, so the
+       trades between two moves share the 60 seconds of the move that follows them.</p>
 
     <h2 id="events">3. Parsing &amp; Responding to Game Events</h2>
     <h3>Game State</h3>
