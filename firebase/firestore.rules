@@ -38,6 +38,15 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
     }
+    // 3p and 4p records per set of bots, and each mode's last ratings fit
+    match /lineups/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /ratings/{mode} {
+      allow read: if true;
+      allow write: if false;
+    }
     // API keys are private — only Cloud Functions (admin SDK) can read
     match /apiKeys/{key} {
       allow read: if false;

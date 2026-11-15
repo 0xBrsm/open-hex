@@ -27,6 +27,7 @@ from services.game_manager import (
 )
 from services.hidden_info import filter_state_for_player, filter_event_for_player
 from services.matchmaker import run_matchmaking
+from services import rankings
 from config import INITIAL_ELO, GCS_REPLAY_BUCKET, MODES, RENAME_COOLDOWN_SECONDS
 
 firebase_admin.initialize_app()
@@ -161,6 +162,8 @@ def _bot_response(bot: dict) -> dict:
     for m in MODES:
         resp.update({
             f"elo_{m}": bot.get(f"elo{m}", INITIAL_ELO),
+            f"elo_se_{m}": bot.get(f"eloSe{m}"),
+            f"rank_{m}": bot.get(f"rank{m}"),
             f"games_{m}": bot.get(f"games{m}", 0),
             f"wins_{m}": bot.get(f"wins{m}", 0),
         })
@@ -616,34 +619,36 @@ def get_action_log(game_id):
 
 @app.route("/api/leaderboard/<mode>")
 def get_leaderboard(mode):
+    """The mode's bots: ranked ones by rank, then the rest by rating. Ratings
+    are refitted every 15 minutes (services/rankings.py); `computed_at` is
+    the last fit."""
     if mode not in MODES:
         return jsonify({"detail": "Invalid mode"}), 404
 
     limit_val = int(request.args.get("limit", 50))
     db = _get_db()
-    elo_key, games_key, wins_key = f"elo{mode}", f"games{mode}", f"wins{mode}"
+    elo_key, rank_key = f"elo{mode}", f"rank{mode}"
 
-    docs = list(
-        db.collection("bots")
-        .where("mode", "==", mode)
-        .order_by(elo_key, direction=firestore.Query.DESCENDING)
-        .limit(limit_val)
-        .stream()
-    )
+    docs = [(doc.id, doc.to_dict()) for doc in db.collection("bots").where("mode", "==", mode).stream()]
+    docs.sort(key=lambda kv: (kv[1].get(rank_key) is None, kv[1].get(rank_key) or 0,
+                              -kv[1].get(elo_key, INITIAL_ELO), kv[0]))
 
     entries = []
-    for i, doc in enumerate(docs):
-        d = doc.to_dict()
+    for bot_id, d in docs[:limit_val]:
         entries.append({
-            "rank": i + 1,
-            "bot_id": doc.id,
+            "rank": d.get(rank_key),
+            "bot_id": bot_id,
             "name": d.get("name", "?"),
             "elo": d.get(elo_key, INITIAL_ELO),
-            "games": d.get(games_key, 0),
-            "wins": d.get(wins_key, 0),
+            "elo_se": d.get(f"eloSe{mode}"),
+            "games": d.get(f"games{mode}", 0),
+            "wins": d.get(f"wins{mode}", 0),
+            "last_game_at": d.get("lastGameAt"),
         })
 
-    return jsonify({"mode": mode, "entries": entries})
+    run = db.collection("ratings").document(mode).get()
+    return jsonify({"mode": mode, "computed_at": run.to_dict().get("computedAt") if run.exists else None,
+                    "entries": entries})
 
 
 # ---------------------------------------------------------------------------
@@ -714,3 +719,13 @@ def scheduled_timeout_check(event: scheduler_fn.ScheduledEvent) -> None:
     count = check_timeouts()
     if count:
         print(f"Aborted {count} timed-out games")
+
+
+@scheduler_fn.on_schedule(schedule="every 15 minutes", memory=options.MemoryOption.MB_512,
+                          timeout_sec=300)
+def scheduled_ratings(event: scheduler_fn.ScheduledEvent) -> None:
+    """Refit every mode's ratings from its games (services/rankings.py)."""
+    for mode in MODES:
+        s = rankings.update_ratings(_get_db(), mode)
+        print(f"Ratings {mode}: {s['activeBots']} active bots, {s['rankedBots']} ranked, "
+              f"{s['tables']} tables, {s['games']} games, {s['iterations']} iterations, {s['seconds']}s")

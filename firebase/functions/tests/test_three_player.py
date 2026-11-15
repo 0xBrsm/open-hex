@@ -13,7 +13,6 @@ from openhex import (
     Action, DiceMode, GameConfig, GameState, OpenHexEngine, PlayerColor, Resource, RobberMode,
     generate_standard_board,
 )
-from services.elo import compute_multiplayer_updates
 
 RED, BLUE, WHITE = PlayerColor.RED, PlayerColor.BLUE, PlayerColor.WHITE
 COSTS = {
@@ -94,15 +93,6 @@ class ThreePlayerGameTest(unittest.TestCase):
         self.assertIsNotNone(state.winner, "no one reached 10 VP")
         self.assertGreaterEqual(state.compute_vp(state.winner), 10)
         self.assertEqual(len(state.players), 3)
-
-
-class MultiplayerEloTest(unittest.TestCase):
-    def test_three_seats_first_gains_last_loses_and_points_balance(self):
-        new = compute_multiplayer_updates([1500.0, 1500.0, 1500.0], finishing_order=[2, 0, 1])
-        self.assertGreater(new[2], 1500.0)
-        self.assertEqual(new[0], 1500.0)
-        self.assertLess(new[1], 1500.0)
-        self.assertAlmostEqual(sum(new), 4500.0)
 
 
 if __name__ == "__main__":

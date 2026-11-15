@@ -20,8 +20,9 @@ const db = firebase.firestore();
 const $app = document.getElementById("app");
 const $nav = document.getElementById("nav");
 
-// The ladder's modes (firebase/functions/config.py MODES). A bot's rating and
-// record in mode m are its elo{m}, games{m} and wins{m} fields
+// The ladder's modes (firebase/functions/config.py MODES). A bot's record in
+// mode m is its games{m} and wins{m} fields; its rating elo{m}, eloSe{m} and
+// rank{m}, refitted every 15 minutes (firebase/functions/services/rankings.py)
 const MODES = ["1v1", "3p", "4p"];
 const MODE_LABELS = { "1v1": "1v1", "3p": "3-Player", "4p": "4-Player" };
 
@@ -102,6 +103,30 @@ function colorDot(color) {
 
 function fmtElo(elo) {
   return Math.round(elo || 1500);
+}
+
+// A bot's rating with its standard error
+function fmtRating(d, mode) {
+  const se = d[`eloSe${mode}`];
+  const pm = se == null ? "" : ` <span style="color:var(--muted); font-size:0.8rem">&plusmn;${Math.round(se)}</span>`;
+  return `${fmtElo(d[`elo${mode}`])}${pm}`;
+}
+
+// The # column: the rank, or why there is none
+function rankCell(d, mode) {
+  const rank = d[`rank${mode}`];
+  if (rank != null) return rank;
+  return playedRecently(d)
+    ? '<span class="badge" title="Fewer than 20 rated games, or no games with the ranked bots">provisional</span>'
+    : '<span title="No games in the last 30 days">&mdash;</span>';
+}
+
+// Leaderboard order: ranked bots by rank, then the rest by rating (the query's order)
+function boardOrder(snap, mode) {
+  const docs = snap.docs.map((doc) => ({ id: doc.id, d: doc.data() }));
+  const ranked = docs.filter((b) => b.d[`rank${mode}`] != null)
+    .sort((a, b) => a.d[`rank${mode}`] - b.d[`rank${mode}`]);
+  return ranked.concat(docs.filter((b) => b.d[`rank${mode}`] == null));
 }
 
 function timeAgo(ts) {
@@ -711,19 +736,16 @@ async function renderHome() {
       db.collection("bots").where("mode", "==", m).orderBy(`elo${m}`, "desc").limit(100).get()),
   ]);
 
-  function miniLb(snap, eloKey, gamesKey, winsKey) {
+  function miniLb(snap, mode) {
     if (snap.empty) return '<p class="empty">No bots registered yet</p>';
-    const docs = snap.docs.filter((doc) => playedRecently(doc.data())).slice(0, 5);
-    if (docs.length === 0) return `<p class="empty">No bots have played in the last ${ACTIVE_DAYS} days</p>`;
-    let html = "<table><tr><th>#</th><th>Bot</th><th>ELO</th><th>W/L</th></tr>";
-    let rank = 0;
-    docs.forEach((doc) => {
-      rank++;
-      const d = doc.data();
-      const g = d[gamesKey] || 0;
-      const w = d[winsKey] || 0;
-      html += `<tr><td>${rank}</td><td><a href="#/bots/${doc.id}">${esc(d.name)}</a></td>`;
-      html += `<td>${fmtElo(d[eloKey])}</td><td>${w}/${g - w}</td></tr>`;
+    const bots = boardOrder(snap, mode).filter((b) => playedRecently(b.d)).slice(0, 5);
+    if (bots.length === 0) return `<p class="empty">No bots have played in the last ${ACTIVE_DAYS} days</p>`;
+    let html = "<table><tr><th>#</th><th>Bot</th><th>Rating</th><th>W/L</th></tr>";
+    bots.forEach(({ id, d }) => {
+      const g = d[`games${mode}`] || 0;
+      const w = d[`wins${mode}`] || 0;
+      html += `<tr><td>${rankCell(d, mode)}</td><td><a href="#/bots/${id}">${esc(d.name)}</a></td>`;
+      html += `<td>${fmtRating(d, mode)}</td><td>${w}/${g - w}</td></tr>`;
     });
     return html + "</table>";
   }
@@ -756,7 +778,7 @@ async function renderHome() {
       ${MODES.map((m, i) => `
       <div class="card">
         <h2>${m} Leaderboard</h2>
-        ${miniLb(tops[i], `elo${m}`, `games${m}`, `wins${m}`)}
+        ${miniLb(tops[i], m)}
         <div style="margin-top:0.5rem; text-align:right"><a href="#/leaderboard/${m}">View all &rarr;</a></div>
       </div>`).join("")}
     </div>
@@ -779,20 +801,17 @@ async function renderLeaderboard(mode, showAll) {
   }
   $app.innerHTML = '<div class="loading">Loading...</div>';
 
-  const eloKey = `elo${mode}`;
-  const gamesKey = `games${mode}`;
-  const winsKey = `wins${mode}`;
-
-  const [docs, activeSnap] = await Promise.all([
+  const [docs, activeSnap, run] = await Promise.all([
     db.collection("bots")
       .where("mode", "==", mode)
-      .orderBy(eloKey, "desc")
+      .orderBy(`elo${mode}`, "desc")
       .limit(100)
       .get(),
     db.collection("games")
       .where("status", "==", "active")
       .where("mode", "==", mode)
       .get(),
+    db.collection("ratings").doc(mode).get(),
   ]);
 
   // Active games section
@@ -816,7 +835,13 @@ async function renderLeaderboard(mode, showAll) {
   }
 
   const base = `#/leaderboard/${mode}`;
-  const shown = showAll ? docs.docs : docs.docs.filter((doc) => playedRecently(doc.data()));
+  const ordered = boardOrder(docs, mode);
+  const shown = showAll ? ordered : ordered.filter((b) => playedRecently(b.d));
+  const fitAt = run.exists ? timeAgo(run.data().computedAt) : "";
+  const method = `<p style="color:var(--muted); font-size:0.85rem; margin-bottom:0.75rem">
+    Bradley-Terry ratings: fitted to every game among the bots that played in the last ${ACTIVE_DAYS} days,
+    each game weighted the same, with the rating's standard error. Bots with fewer than 20 rated games are provisional.
+    <a href="#/guide">How ratings work</a>.${fitAt ? ` Updated ${fitAt}.` : ""}</p>`;
   const filterBar = showAll
     ? `<div class="lb-filter">All bots. <a href="${base}">Active only</a></div>`
     : `<div class="lb-filter">Bots that played in the last ${ACTIVE_DAYS} days. <a href="${base}/all">See all</a></div>`;
@@ -829,18 +854,15 @@ async function renderLeaderboard(mode, showAll) {
     table = `<p class="empty">No bots have played a ${esc(mode)} game in the last ${ACTIVE_DAYS} days.</p>`;
   } else {
     table =
-      '<div class="table-scroll"><table><tr><th>#</th><th>Bot</th><th>ELO</th><th>Games</th><th>Wins</th><th>Win Rate</th><th>Last Game</th></tr>';
-    let rank = 0;
-    shown.forEach((doc) => {
-      rank++;
-      const d = doc.data();
-      const g = d[gamesKey] || 0;
-      const w = d[winsKey] || 0;
+      '<div class="table-scroll"><table><tr><th>#</th><th>Bot</th><th>Rating</th><th>Games</th><th>Wins</th><th>Win Rate</th><th>Last Game</th></tr>';
+    shown.forEach(({ id, d }) => {
+      const g = d[`games${mode}`] || 0;
+      const w = d[`wins${mode}`] || 0;
       const wr = g > 0 ? `${Math.round((w / g) * 100)}%` : "—";
-      table += `<tr>
-        <td>${rank}</td>
-        <td><a href="#/bots/${doc.id}">${esc(d.name)}</a></td>
-        <td><strong>${fmtElo(d[eloKey])}</strong></td>
+      table += `<tr${d[`rank${mode}`] == null ? ' style="color:var(--muted)"' : ""}>
+        <td>${rankCell(d, mode)}</td>
+        <td><a href="#/bots/${id}">${esc(d.name)}</a></td>
+        <td><strong>${fmtRating(d, mode)}</strong></td>
         <td>${g}</td><td>${w}</td><td>${wr}</td>
         <td style="color:var(--muted); font-size:0.85rem">${timeAgo(d.lastGameAt) || "—"}</td>
       </tr>`;
@@ -860,6 +882,7 @@ async function renderLeaderboard(mode, showAll) {
     ${activeHtml}
     <div class="card">
       <h2>${mode.toUpperCase()} Leaderboard</h2>
+      ${method}
       ${filterBar}
       ${table}
       ${cta}
@@ -881,20 +904,22 @@ async function renderBotDetail(botId) {
   }
   const bot = botDoc.data();
   const mode = bot.mode || "1v1";
-  const eloKey = `elo${mode}`;
-  const gamesKey = `games${mode}`;
-  const winsKey = `wins${mode}`;
-  const totalGames = bot[gamesKey] || 0;
-  const totalWins = bot[winsKey] || 0;
+  const totalGames = bot[`games${mode}`] || 0;
+  const totalWins = bot[`wins${mode}`] || 0;
   const wr = totalGames > 0 ? `${Math.round((totalWins / totalGames) * 100)}%` : "—";
 
-  // Fetch completed games involving this bot
-  const gamesSnap = await db
-    .collection("games")
-    .where("status", "in", ["completed", "aborted"])
-    .orderBy("completedAt", "desc")
-    .limit(200)
-    .get();
+  // Recent completed games site-wide (this bot's are picked out below) and, for
+  // 1v1, the server's all-time record against each opponent
+  const noRecord = { forEach() {} };
+  const [gamesSnap, h2hA, h2hB] = await Promise.all([
+    db.collection("games")
+      .where("status", "in", ["completed", "aborted"])
+      .orderBy("completedAt", "desc")
+      .limit(200)
+      .get(),
+    mode === "1v1" ? db.collection("head-to-head").where("bot1Id", "==", botId).get() : noRecord,
+    mode === "1v1" ? db.collection("head-to-head").where("bot2Id", "==", botId).get() : noRecord,
+  ]);
 
   // Filter to games where this bot participated
   const botGames = [];
@@ -904,9 +929,20 @@ async function renderBotDetail(botId) {
     if (involved) botGames.push({ id: doc.id, ...g });
   });
 
-  // Head-to-head stats
+  // Head-to-head stats: 1v1 from the head-to-head records (all time, aborted
+  // games included, as the ratings count them); 3p and 4p from the recent games
   const h2h = {}; // opponentId -> { name, wins, losses, games }
-  for (const g of botGames) {
+  h2hA.forEach((doc) => {
+    const d = doc.data();
+    const wins = (d.bot1FirstWins || 0) + (d.bot2FirstLosses || 0);
+    h2h[d.bot2Id] = { name: d.bot2Name, wins, losses: (d.totalGames || 0) - wins, games: d.totalGames || 0 };
+  });
+  h2hB.forEach((doc) => {
+    const d = doc.data();
+    const wins = (d.bot2FirstWins || 0) + (d.bot1FirstLosses || 0);
+    h2h[d.bot1Id] = { name: d.bot1Name, wins, losses: (d.totalGames || 0) - wins, games: d.totalGames || 0 };
+  });
+  for (const g of mode === "1v1" ? [] : botGames) {
     if (g.status !== "completed") continue;
     for (const p of g.players || []) {
       if (p.botId === botId) continue;
@@ -971,7 +1007,8 @@ async function renderBotDetail(botId) {
     <h2 style="margin-bottom:0.5rem">${esc(bot.name)}</h2>
     ${descHtml}
     <div class="stat-grid" style="margin-bottom:1.5rem">
-      <div class="stat"><div class="stat-value">${fmtElo(bot[eloKey])}</div><div class="stat-label">ELO</div></div>
+      <div class="stat"><div class="stat-value">${fmtRating(bot, mode)}</div><div class="stat-label">Rating</div></div>
+      <div class="stat"><div class="stat-value">${rankCell(bot, mode)}</div><div class="stat-label">Rank</div></div>
       <div class="stat"><div class="stat-value">${totalGames}</div><div class="stat-label">Games</div></div>
       <div class="stat"><div class="stat-value">${totalWins}</div><div class="stat-label">Wins</div></div>
       <div class="stat"><div class="stat-value">${wr}</div><div class="stat-label">Win Rate</div></div>
@@ -1259,9 +1296,9 @@ function renderGuide() {
     "id": "a1b2c3d4e5f60718",
     "name": "my_bot",
     "mode": "1v1",
-    "elo_1v1": 1500.0, "games_1v1": 0, "wins_1v1": 0,
-    "elo_3p": 1500.0, "games_3p": 0, "wins_3p": 0,
-    "elo_4p": 1500.0, "games_4p": 0, "wins_4p": 0
+    "elo_1v1": 1500.0, "elo_se_1v1": null, "rank_1v1": null, "games_1v1": 0, "wins_1v1": 0,
+    "elo_3p": 1500.0, "elo_se_3p": null, "rank_3p": null, "games_3p": 0, "wins_3p": 0,
+    "elo_4p": 1500.0, "elo_se_4p": null, "rank_4p": null, "games_4p": 0, "wins_4p": 0
   },
   "api_key": "your-secret-api-key"
 }</pre>
@@ -1465,6 +1502,23 @@ Authorization: Bearer your-api-key</pre>
     <p>The server matches players automatically. Check your queue status:</p>
     <pre>GET /api/queue/status
 Authorization: Bearer your-api-key</pre>
+
+    <h3>Ratings</h3>
+    <p>Every 15 minutes the server fits Bradley-Terry ratings to the games among the bots that played in the
+       last ${ACTIVE_DAYS} days. A bot's rating is the one at which its expected wins equal its actual wins against
+       the bots it has played, every game weighted the same. The scale is Elo's: a bot rated 400 points above
+       another is expected to win 10 games for each one it loses. In 3p and 4p only the winner counts: a bot's
+       chance of winning a table is in proportion to 10<sup>rating/400</sup> among the seats.</p>
+    <ul>
+      <li>The order games were played in makes no difference, and ratings change at the next update, not as a
+          game ends. A game aborted for timeouts counts, won by the best-placed seat not at fault.</li>
+      <li>The &plusmn; is the rating's standard error. A bot with fewer than 20 rated games is provisional and
+          is listed after the ranked bots.</li>
+      <li>A bot that has not played for ${ACTIVE_DAYS} days is left out, with its games, and loses its rank. It
+          keeps its last rating, which matchmaking starts from when it returns.</li>
+      <li>A bot's whole record counts. To rate a new version from scratch, register it as a new bot.</li>
+      <li>Matchmaking pairs bots of similar rating.</li>
+    </ul>
 
     <h2 id="game-loop">5. The Full Game Loop</h2>
     <ol>

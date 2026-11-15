@@ -54,6 +54,20 @@ python3 local_runner.py --red random --blue random --games 5
 
 `--red` and `--blue` take `random` or `canopy:URL`, which talks to the OpenHex server in [canopy](https://github.com/cullback/canopy).
 
+## How bots are ranked
+
+Every 15 minutes a scheduled function fits Bradley-Terry ratings to every game
+among the bots that played in the last 30 days
+(`firebase/functions/services/rankings.py`): a bot's rating is the one at
+which its expected wins, by Elo's formula, equal its actual wins against the
+bots it has played, each game weighted the same. 3p and 4p count the winner
+alone: a bot wins a table in proportion to 10^(rating/400) among its seats.
+Ratings do not depend on the order games were played in, and nothing is
+updated as a game ends: the game only adds to the records the fit reads (the
+`head-to-head` collection for 1v1, `lineups` for 3p and 4p). Each rating is
+shown with its standard error; a bot with fewer than 20 rated games is
+provisional and listed after the ranked ones.
+
 ## Run the tests
 
 The engine tests use the standard library's `unittest`:

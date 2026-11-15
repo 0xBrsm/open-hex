@@ -21,7 +21,7 @@ from openhex.engine import is_player_trade
 from openhex.json_codec import _action_from_json, _action_to_json, _event_to_json, _config_from_json, _board_from_json, _event_from_json, game_log_to_json, resolve_action_indices
 
 import config as cfg
-from services.elo import compute_1v1_updates, compute_multiplayer_updates
+from services.rankings import lineup_id
 from services.hidden_info import filter_event_for_player, public_event
 
 
@@ -390,7 +390,7 @@ def process_action(game_id: str, bot_id: str, action_dict: dict,
                     duration_ms=dur_ms if success else None, auto=auto)
 
     if completed and winner_bid:
-        _update_ratings(game_id)
+        _update_records(game_id)
         _update_head_to_head(game_id)
         _save_replay_to_gcs(game_id)
 
@@ -398,10 +398,13 @@ def process_action(game_id: str, bot_id: str, action_dict: dict,
 
 
 # ---------------------------------------------------------------------------
-# Rating updates
+# Records
 # ---------------------------------------------------------------------------
 
-def _update_ratings(game_id: str) -> None:
+def _update_records(game_id: str) -> None:
+    """Count a finished game in its seats' records and, for 3p and 4p, in the
+    table's `lineups` document. Ratings are refitted from these and the
+    head-to-head records on a schedule (services/rankings.py)."""
     db = _get_db()
     game_doc = db.collection("games").document(game_id).get()
     if not game_doc.exists:
@@ -411,66 +414,29 @@ def _update_ratings(game_id: str) -> None:
     winner_bot_id = game["winnerBotId"]
     players = game["players"]
 
-    elo_key, games_key, wins_key = f"elo{mode}", f"games{mode}", f"wins{mode}"
+    games_key, wins_key = f"games{mode}", f"wins{mode}"
     # The leaderboard hides bots whose last game is more than 30 days old
     last_game_at = game.get("completedAt") or _now_iso()
 
-    # Read current bot ratings
-    bot_docs = {}
     for p in players:
-        doc = db.collection("bots").document(p["botId"]).get()
-        if doc.exists:
-            bot_docs[p["botId"]] = doc.to_dict()
+        fields = {
+            games_key: firestore.Increment(1),
+            wins_key: firestore.Increment(1 if p["botId"] == winner_bot_id else 0),
+            "lastGameAt": last_game_at,
+        }
+        if len(players) == 2:
+            fields["lastOpponentId"] = next(q["botId"] for q in players if q is not p)
+        db.collection("bots").document(p["botId"]).update(fields)
 
-    if mode == "1v1" and len(players) == 2:
-        p0, p1 = players[0], players[1]
-        r0 = bot_docs.get(p0["botId"], {}).get(elo_key, cfg.INITIAL_ELO)
-        r1 = bot_docs.get(p1["botId"], {}).get(elo_key, cfg.INITIAL_ELO)
-
-        if p0["botId"] == winner_bot_id:
-            new_r0, new_r1 = compute_1v1_updates(r0, r1)
-        else:
-            new_r1, new_r0 = compute_1v1_updates(r1, r0)
-
-        for p, opp in [(p0, p1), (p1, p0)]:
-            is_winner = p["botId"] == winner_bot_id
-            new_r = new_r0 if p is p0 else new_r1
-            bot_data = bot_docs.get(p["botId"], {})
-            db.collection("bots").document(p["botId"]).update({
-                elo_key: new_r,
-                games_key: bot_data.get(games_key, 0) + 1,
-                wins_key: bot_data.get(wins_key, 0) + (1 if is_winner else 0),
-                "lastOpponentId": opp["botId"],
-                "lastGameAt": last_game_at,
-            })
-    else:
-        # 3p and 4p
-        state = from_json(json.loads(load_state_json(game_id, game, db)), GameState)
-        seat_vp = []
-        for p in players:
-            color = PlayerColor(p["color"])
-            vp = state.compute_vp(color)
-            seat_vp.append((p["seat"], vp, p["botId"]))
-
-        seat_vp.sort(key=lambda x: (-1 if x[2] == winner_bot_id else 0, -x[1]))
-        finishing_order = [x[0] for x in seat_vp]
-
-        ratings = []
-        for p in sorted(players, key=lambda x: x["seat"]):
-            ratings.append(bot_docs.get(p["botId"], {}).get(elo_key, cfg.INITIAL_ELO))
-
-        new_ratings = compute_multiplayer_updates(ratings, finishing_order)
-        sorted_players = sorted(players, key=lambda x: x["seat"])
-
-        for p, new_r in zip(sorted_players, new_ratings):
-            is_winner = p["botId"] == winner_bot_id
-            bot_data = bot_docs.get(p["botId"], {})
-            db.collection("bots").document(p["botId"]).update({
-                elo_key: new_r,
-                games_key: bot_data.get(games_key, 0) + 1,
-                wins_key: bot_data.get(wins_key, 0) + (1 if is_winner else 0),
-                "lastGameAt": last_game_at,
-            })
+    if len(players) > 2:
+        bot_ids = sorted(p["botId"] for p in players)
+        db.collection("lineups").document(lineup_id(mode, bot_ids)).set({
+            "mode": mode,
+            "botIds": bot_ids,
+            "games": firestore.Increment(1),
+            "wins": {winner_bot_id: firestore.Increment(1)},
+            "lastGameAt": last_game_at,
+        }, merge=True)
 
 
 # ---------------------------------------------------------------------------
@@ -666,7 +632,7 @@ def check_timeouts() -> int:
             "timeoutStrikes": strikes,
         })
 
-        _update_ratings(game_id)
+        _update_records(game_id)
         _update_head_to_head(game_id)
         _save_replay_to_gcs(game_id)
         count += 1
