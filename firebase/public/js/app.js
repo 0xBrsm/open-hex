@@ -74,6 +74,9 @@ function route() {
   } else if (parts[0] === "events-reference") {
     renderNav("guide");
     renderEventsReference();
+  } else if (parts[0] === "ratings") {
+    renderNav("guide");
+    renderRatings();
   } else {
     renderNav("");
     $app.innerHTML = '<p class="empty">Page not found</p>';
@@ -841,7 +844,7 @@ async function renderLeaderboard(mode, showAll) {
   const method = `<p style="color:var(--muted); font-size:0.85rem; margin-bottom:0.75rem">
     Bradley-Terry ratings: fitted to every game among the bots that played in the last ${ACTIVE_DAYS} days,
     each game weighted the same, with the rating's standard error. Bots with fewer than 20 rated games are provisional.
-    <a href="#/guide">How ratings work</a>.${fitAt ? ` Updated ${fitAt}.` : ""}</p>`;
+    <a href="#/ratings">How ratings work</a>.${fitAt ? ` Updated ${fitAt}.` : ""}</p>`;
   const filterBar = showAll
     ? `<div class="lb-filter">All bots. <a href="${base}">Active only</a></div>`
     : `<div class="lb-filter">Bots that played in the last ${ACTIVE_DAYS} days. <a href="${base}/all">See all</a></div>`;
@@ -1519,6 +1522,7 @@ Authorization: Bearer your-api-key</pre>
       <li>A bot's whole record counts. To rate a new version from scratch, register it as a new bot.</li>
       <li>Matchmaking pairs bots of similar rating.</li>
     </ul>
+    <p>The details, with what each rating gap means as a chance of winning: <a href="#/ratings">How Ratings Work</a>.</p>
 
     <h2 id="game-loop">5. The Full Game Loop</h2>
     <ol>
@@ -2443,6 +2447,81 @@ function renderEventsReference() {
       <tr><td><code>turnEnded</code></td><td>player, turnNumber</td><td>Main</td></tr>
       <tr><td><code>gameWon</code></td><td>player, victoryPoints</td><td>Main</td></tr>
     </table>
+  </div>
+  `;
+}
+
+// ---------------------------------------------------------------------------
+// How ratings work
+// ---------------------------------------------------------------------------
+
+function renderRatings() {
+  const winChance = (gap) => Math.round(100 / (1 + Math.pow(10, -gap / 400)));
+  const rows = [0, 50, 100, 200, 300, 400]
+    .map((gap) => `<tr><td>${gap}</td><td>${winChance(gap)}%</td></tr>`).join("");
+  $app.innerHTML = `
+  <div class="guide">
+    <h1 style="font-size:1.5rem; margin-bottom:0.5rem;">How Ratings Work</h1>
+    <p style="color:var(--muted); margin-bottom:1.5rem;">
+      How the leaderboards rate and rank bots. <a href="#/guide">&larr; Back to guide</a>
+    </p>
+
+    <p>Every 15 minutes the server fits <strong>Bradley-Terry ratings</strong> to the games among the bots that
+       played in the last ${ACTIVE_DAYS} days. A bot's rating is the one at which its expected wins equal its
+       actual wins against the bots it has played, every game weighted the same. Since 15 November 2026 these
+       replace the Elo the ladder used before, which moved a fixed step after every game and so tracked a bot's
+       last few dozen games and the order they came in.</p>
+
+    <h2>What a rating means</h2>
+    <p>The scale is Elo's, centred on 1500. In 1v1, bot A beats bot B with probability
+       <code>1 / (1 + 10<sup>(R<sub>B</sub> &minus; R<sub>A</sub>) / 400</sup>)</code>:</p>
+    <table>
+      <tr><th>Rating gap</th><th>Stronger bot wins</th></tr>
+      ${rows}
+    </table>
+    <p>In 3p and 4p only the winner counts. Each seat's chance of winning the table is in proportion to
+       10<sup>rating/400</sup>: at a table of equals each seat wins 1 game in 4 (1 in 3 in 3p), and a bot
+       rated 200 above its three opponents wins about 51% of 4p games. Places below first are not used: they
+       are ordered by victory points, often tied, and open to kingmaking.</p>
+
+    <h2>Which games count</h2>
+    <ul>
+      <li>Every game between bots that have played in the last ${ACTIVE_DAYS} days, however old the game.</li>
+      <li>A bot that has not played for ${ACTIVE_DAYS} days is left out, with its games. A 1v1 game against it no
+          longer counts. A 3p or 4p game an active bot won still counts, as a game among the table's active bots;
+          one the idle bot won does not.</li>
+      <li>A game aborted for timeouts counts, won by the best-placed seat not at fault.</li>
+      <li>The order games were played in makes no difference. A bot's rating can move while it is not playing,
+          as its opponents play other bots or go idle.</li>
+    </ul>
+
+    <h2>Ranks, &plusmn; and provisional bots</h2>
+    <ul>
+      <li>The &plusmn; is the rating's standard error: how far, give or take, the bot's standing in the field could
+          be from its true standing. It narrows as the bot plays more games.</li>
+      <li>A bot is <strong>provisional</strong>, and listed after the ranked bots without a rank, while it has fewer
+          than 20 rated games, or if none of its games connects it, even through other bots, to the main group of
+          ranked bots: two groups that have never met have no common scale.</li>
+      <li>An idle bot loses its rank and keeps its last rating. Matchmaking starts from that rating if it returns.</li>
+    </ul>
+
+    <h2>For bot authors</h2>
+    <ul>
+      <li>A bot's whole record counts. To rate a new version from scratch, register it as a new bot rather than
+          updating the old one in place.</li>
+      <li>Matchmaking pairs bots of similar rating, with some randomness.</li>
+      <li>The API reports <code>elo_&lt;mode&gt;</code>, <code>elo_se_&lt;mode&gt;</code> (the &plusmn;) and
+          <code>rank_&lt;mode&gt;</code> (<code>null</code> while unranked) from <code>GET /api/bots/me</code>.
+          <code>GET /api/leaderboard/&lt;mode&gt;</code> lists ranked bots by rank, then the rest by rating, with
+          <code>computed_at</code>, the time of the last fit.</li>
+    </ul>
+
+    <h2>The fit</h2>
+    <p>Each bot also carries two virtual games, one won and one lost, against a fixed opponent rated 1500. A bot
+       with no games therefore sits at 1500, an unbeaten bot gets a finite rating, and the fit always has a
+       solution. The ratings are found by Newton's method, and the &plusmn; comes from the same calculation (the
+       inverse of the Fisher information), measured against the field's average weighted by games. The code is
+       <a href="https://github.com/bovard/open-hex/blob/main/firebase/functions/services/rankings.py">services/rankings.py</a>.</p>
   </div>
   `;
 }

@@ -56,17 +56,36 @@ python3 local_runner.py --red random --blue random --games 5
 
 ## How bots are ranked
 
-Every 15 minutes a scheduled function fits Bradley-Terry ratings to every game
-among the bots that played in the last 30 days
-(`firebase/functions/services/rankings.py`): a bot's rating is the one at
-which its expected wins, by Elo's formula, equal its actual wins against the
-bots it has played, each game weighted the same. 3p and 4p count the winner
-alone: a bot wins a table in proportion to 10^(rating/400) among its seats.
-Ratings do not depend on the order games were played in, and nothing is
-updated as a game ends: the game only adds to the records the fit reads (the
-`head-to-head` collection for 1v1, `lineups` for 3p and 4p). Each rating is
-shown with its standard error; a bot with fewer than 20 rated games is
-provisional and listed after the ranked ones.
+The leaderboards use Bradley-Terry ratings, refitted every 15 minutes by a
+scheduled function (`firebase/functions/services/rankings.py`). Since
+15 November 2026 they replace the per-game Elo the ladder used before, which
+moved a fixed 32 points per game and so tracked a bot's last few dozen games
+and the order they came in. The site explains it for bot authors at
+[How Ratings Work](https://open-hex.web.app/#/ratings).
+
+- **The model.** A bot's rating is the one at which its expected wins equal
+  its actual wins against the bots it has played, each game weighted the
+  same, on Elo's scale: in 1v1, A beats B with probability
+  1 / (1 + 10^((R_B - R_A) / 400)). In 3p and 4p only the winner counts: a
+  seat wins the table in proportion to 10^(R / 400) (Luce's choice model; with
+  two seats it is exactly Bradley-Terry).
+- **Which games count.** Only bots that played in the last 30 days are rated,
+  from all their games against each other. A 1v1 game against an idle bot is
+  left out; a 3p or 4p game an active bot won stays in, as a game among the
+  table's active bots. Games aborted for timeouts count, won by the
+  best-placed seat not at fault. The order of games makes no difference.
+- **Ranks.** Each rating has a standard error, of the bot's standing against
+  the games-weighted field. A bot with fewer than 20 rated games, or not
+  connected by games to the main group, is provisional and unranked. An idle
+  bot keeps its last rating, which matchmaking starts from if it returns, and
+  loses its rank. A new version of a bot should be registered as a new bot.
+- **The fit.** Each bot carries a prior of two virtual games, one won and one
+  lost, against a fixed 1500 opponent. The fit is solved by Newton's method
+  (numpy), well under a second for hundreds of active bots.
+- **Data.** A finished game only adds to the records the fit reads: the
+  `head-to-head` collection for 1v1 and `lineups` (one document per set of
+  bots) for 3p and 4p. Each run writes `elo<mode>`, `eloSe<mode>` and
+  `rank<mode>` to the bot documents and its summary to `ratings/<mode>`.
 
 ## Run the tests
 
