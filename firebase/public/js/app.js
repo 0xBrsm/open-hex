@@ -1852,7 +1852,7 @@ function renderCoordinates() {
       <tr>
         <td><code>edge</code></td>
         <td><code>{"edge": [{"x":0,"y":0,"z":1}, {"x":0,"y":1,"z":1}]}</code></td>
-        <td><code>{"edge": 15}</code></td>
+        <td><code>{"edge": 29}</code></td>
       </tr>
       <tr>
         <td><code>hex</code></td>
@@ -1865,8 +1865,8 @@ function renderCoordinates() {
     <pre>// Place settlement at vertex #11 (0,0,1)
 {"type": "placeInitialSettlement", "vertex": 11}
 
-// Build road on edge #15
-{"type": "buildRoad", "edge": 15}
+// Build road on edge #29 (0,0,1)-(0,1,1)
+{"type": "buildRoad", "edge": 29}
 
 // Move robber to hex #3 (0,1,-1)
 {"type": "moveRobber", "hex": 3}
@@ -1878,7 +1878,7 @@ function renderCoordinates() {
     <p>Edges are defined by <strong>two adjacent vertex coordinates</strong>.
        When submitting a <code>buildRoad</code> action, provide both endpoints or an edge index:</p>
     <pre>// Using edge index:
-{"type": "buildRoad", "edge": 15}
+{"type": "buildRoad", "edge": 29}
 
 // Using coordinates:
 {"type": "buildRoad", "edge": [{"x":0,"y":0,"z":1}, {"x":0,"y":1,"z":1}]}</pre>
