@@ -1,15 +1,19 @@
 """Balanced dice — weighted 36-card deck with recency and seven balancing.
 
 Algorithm (per draw):
-  1. If cards remaining <= RESHUFFLE_THRESHOLD, reshuffle full 36-card deck.
+  1. If fewer than RESHUFFLE_THRESHOLD cards remain, reshuffle the full 36-card deck.
   2. Compute base weight per sum k: count_of_cards_with_sum_k / total_cards.
   3. Recency penalty: for each sum, multiply weight by max(0, 1 - 0.34 * appearances_in_last_5_rolls).
   4. Seven balancing (2+ players): streak + imbalance adjustment on the 7-weight.
+     A streak is the run of 7s by one player; a 7 by another player starts a new
+     one, and other totals leave it standing.
   5. Normalize weights to probabilities, weighted random draw.
 
 Background reading on balanced dice:
   - https://blog.colonist.io/designing-balanced-dice/
   - https://blog.colonist.io/balancing-7s-on-1v1/
+  - The code the second post links as its final code (DiceControllerBalanced):
+    https://pastebin.com/wWH4Ka96
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 # Algorithm constants
-RESHUFFLE_THRESHOLD = 13       # reshuffle when this many cards remain
+RESHUFFLE_THRESHOLD = 13       # reshuffle when fewer than this many cards remain
 RECENCY_WINDOW = 5             # track last N rolls
 RECENCY_PENALTY = 0.34         # weight multiplier reduction per recent appearance
 SEVEN_STREAK_PENALTY = 0.4     # per-streak-count adjustment for 7s
@@ -62,7 +66,7 @@ class BalancedDice:
             num_players: Number of players in the game.
         """
         # Step 1: Reshuffle if needed
-        if len(self.deck) <= RESHUFFLE_THRESHOLD:
+        if len(self.deck) < RESHUFFLE_THRESHOLD:
             self._reshuffle(rng)
 
         # Step 2-4: Compute weights per sum
@@ -171,14 +175,13 @@ class BalancedDice:
     def _update_seven_tracking(self, total: int, player: str | None) -> None:
         if player is None:
             return
-        if total == 7:
-            self.sevens_by_player[player] = self.sevens_by_player.get(player, 0) + 1
-            if self.seven_streak_player == player:
-                self.seven_streak_count += 1
-            else:
-                self.seven_streak_player = player
-                self.seven_streak_count = 1
+        # Only a 7 moves the streak: the same player's extends it, another
+        # player's starts a new one. Other totals leave it standing.
+        if total != 7:
+            return
+        self.sevens_by_player[player] = self.sevens_by_player.get(player, 0) + 1
+        if self.seven_streak_player == player:
+            self.seven_streak_count += 1
         else:
-            # Any non-7 breaks the streak
-            self.seven_streak_count = 0
-            self.seven_streak_player = None
+            self.seven_streak_player = player
+            self.seven_streak_count = 1

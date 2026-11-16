@@ -14,6 +14,7 @@ from openhex import (
     Resource, RobberMode, Road, Terrain, Tile, VertexBuilding, Edge, HexPoint,
     TERRAIN_RESOURCE, generate_standard_board, to_json, from_json,
 )
+from openhex.dice import BalancedDice
 from openhex.state import DiceResult, PendingAction
 from openhex.types import DevCard
 from services.hidden_info import filter_event_for_player, public_event
@@ -58,16 +59,40 @@ class BalancedDiceTest(unittest.TestCase):
 
     def test_rolls_come_from_a_deck_across_json_round_trips(self):
         # The server loads the state from JSON before every action. A deck of
-        # 36 cards reshuffled at 13 left yields 23 distinct cards in a row;
-        # independent dice repeat a card long before that.
+        # 36 cards reshuffled when fewer than 13 remain yields 24 distinct
+        # cards in a row; independent dice repeat a card long before that.
         state = duel_state()
         engine = OpenHexEngine(rng=random.Random(7))
         cards = []
-        for _ in range(23):
+        for _ in range(24):
             state = round_trip(state)
             cards.append(engine._roll(state))
-        self.assertEqual(len(set(cards)), 23, cards)
-        self.assertEqual(len(round_trip(state).balanced_dice.deck), 13)
+        self.assertEqual(len(set(cards)), 24, cards)
+        self.assertEqual(len(round_trip(state).balanced_dice.deck), 12)
+
+    def test_the_deck_is_reshuffled_when_fewer_than_13_cards_remain(self):
+        dice = BalancedDice.create(random.Random(3))
+        rng = random.Random(4)
+        for _ in range(23):
+            dice.draw(rng, "red", 2)
+        self.assertEqual(len(dice.deck), 13)
+        dice.draw(rng, "blue", 2)          # 13 left: drawn from, not reshuffled
+        self.assertEqual(len(dice.deck), 12)
+        dice.draw(rng, "red", 2)           # 12 left: reshuffled, then drawn from
+        self.assertEqual(len(dice.deck), 35)
+
+    def test_only_a_seven_ends_a_seven_streak(self):
+        dice = BalancedDice.create(random.Random(3))
+        dice._update_seven_tracking(7, "red")
+        dice._update_seven_tracking(7, "red")
+        dice._update_seven_tracking(8, "blue")
+        dice._update_seven_tracking(6, "red")
+        self.assertEqual((dice.seven_streak_player, dice.seven_streak_count), ("red", 2))
+        # Red's run still damps red's 7 and lifts blue's.
+        self.assertLess(dice._seven_multiplier("red", 2), 1.0)
+        self.assertGreater(dice._seven_multiplier("blue", 2), 1.0)
+        dice._update_seven_tracking(7, "blue")
+        self.assertEqual((dice.seven_streak_player, dice.seven_streak_count), ("blue", 1))
 
     def test_random_mode_carries_no_deck(self):
         config = GameConfig(num_players=4, dice_mode=DiceMode.RANDOM)
