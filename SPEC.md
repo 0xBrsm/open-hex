@@ -112,7 +112,7 @@ Standard deck: **25 cards** total. Use this deck for all player counts (2-4).
 | Value | Description |
 |-------|-------------|
 | `"random"` | True random 2d6 each roll |
-| `"balanced"` | 36-card deck, reshuffled every 25 draws (see [Section 10](#10-balanced-dice)) |
+| `"balanced"` | 36-card deck with recency and seven balancing (see [Section 10](#10-balanced-dice)) |
 
 ---
 
@@ -362,7 +362,10 @@ The complete game state at any point in time. This is the authoritative represen
   "winner": null,
   "balancedDice": {
     "deck": [[1,1],[3,4],[6,2]],
-    "drawCount": 12
+    "recentRolls": [6, 8, 7, 5, 9],
+    "sevensByPlayer": {"red": 2, "blue": 1},
+    "sevenStreakPlayer": "red",
+    "sevenStreakCount": 1
   }
 }
 ```
@@ -451,7 +454,7 @@ When `diceMode` is `"balanced"`, the state includes:
 | Field | Type | Visibility | Description |
 |-------|------|------------|-------------|
 | `balancedDice.deck` | [[int,int]] | **Hidden** | Remaining cards as [die1, die2] pairs |
-| `balancedDice.drawCount` | integer | Public | Cards drawn since last shuffle (0-24) |
+| `balancedDice.recentRolls`, `sevensByPlayer`, `sevenStreakPlayer`, `sevenStreakCount` | | Hidden in player views (they follow from the public rolls) | Recency and seven-balancing state |
 
 ### Dice Result
 
@@ -1131,27 +1134,16 @@ This yields the natural 2d6 distribution:
 
 ### Procedure
 
-1. **Initialization**: At game start (after setup phase ends), create the 36-card deck and shuffle it uniformly at random. Set `drawCount = 0`.
+The deck starts full. Each roll by a player:
 
-2. **Drawing**: When a dice roll is needed:
-   - Draw the top card from the deck
-   - Increment `drawCount`
-   - The card's `(die1, die2)` values are the dice result
+1. **Reshuffle**: if fewer than 13 cards remain, the deck is refilled to all 36 cards. Only the deck is reset; the recent totals and the seven counts below carry over.
+2. **Weights**: each total `k` weighs `c_k / T * max(0, 1 - 0.34 * a_k)`, where `c_k` is the number of cards of total `k` left, `T` the cards left, and `a_k` the number of times `k` came up in the last 5 rolls.
+3. **Seven balancing** (2 or more players): the weight of 7 is multiplied by `clamp(imbalance + streak, 0, 2)`.
+   - `streak` is `0.4 * n` for a run of `n` sevens by one player, negative when the roller owns the run. A seven by the same player extends the run, a seven by another player starts a new run of 1, and other totals leave it as it is.
+   - `imbalance` is `1 + (1/P - s/S) / (1/P)`, where `P` is the number of players, `S` the sevens rolled so far and `s` the roller's share of them; it is 1 until `S` reaches `P`.
+4. **Draw**: a total is drawn in proportion to its weight and a card of that total uniformly; the card leaves the deck and its `(die1, die2)` is the roll.
 
-3. **Reshuffling**: After drawing the 25th card (when `drawCount` reaches 25):
-   - Recreate the full 36-card deck
-   - Shuffle uniformly at random
-   - Reset `drawCount = 0`
-
-4. **Next cycle**: Continue drawing from the newly shuffled deck
-
-### Rationale
-
-Drawing 25 of 36 cards before reshuffling ensures:
-- The distribution approximates true 2d6 probabilities within each cycle
-- 11 cards remain undrawn each cycle, preserving uncertainty about which totals will appear
-- No single total can appear more than its natural maximum in 25 draws (e.g., 7 can appear at most 6 times)
-- Games feel fair without being deterministic
+This follows colonist.io's balanced dice ([designing balanced dice](https://blog.colonist.io/designing-balanced-dice/), [balancing 7s](https://blog.colonist.io/balancing-7s-on-1v1/) and the code the second post links).
 
 ### State Representation
 
@@ -1159,14 +1151,15 @@ Drawing 25 of 36 cards before reshuffling ensures:
 {
   "balancedDice": {
     "deck": [[3,4],[1,6],[5,5],[2,1]],
-    "drawCount": 12
+    "recentRolls": [6, 8, 7, 5, 9],
+    "sevensByPlayer": {"red": 2, "blue": 1},
+    "sevenStreakPlayer": "red",
+    "sevenStreakCount": 1
   }
 }
 ```
 
-The `deck` array contains the remaining undrawn cards in order. This field is **hidden** from players.
-
-The `drawCount` is public information — players can know how many cards have been drawn in the current cycle.
+The `deck` array holds the cards left. A player's view shows only `{"remaining": N}`, the number of cards left; the other fields follow from the public rolls.
 
 ---
 
@@ -1196,7 +1189,7 @@ In a multiplayer game, not all state is visible to all players. The spec defines
 - `publicVictoryPoints`
 - `currentPlayer`, `turnOrder`, `turnNumber`
 - `trades` — every standing offer and every seat's answer to it
-- `balancedDice.drawCount`
+- `balancedDice.remaining` — the number of dice cards left
 - All event types and fields not listed as private above
 
 ### Per-Player Views
